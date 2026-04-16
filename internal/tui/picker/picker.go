@@ -268,8 +268,6 @@ func categoryLabel(c fields.Category) string {
 	switch c {
 	case fields.Shared:
 		return "Shared"
-	case fields.Transient:
-		return "Transient"
 	default:
 		return "Isolated"
 	}

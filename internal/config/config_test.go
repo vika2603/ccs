@@ -9,17 +9,17 @@ import (
 
 func TestDefault(t *testing.T) {
 	c := Default()
-	if c.Version != 1 {
+	if c.Version != 2 {
 		t.Errorf("version: %d", c.Version)
 	}
-	if !containsString(c.Fields.Shared, "skills") {
-		t.Errorf("shared missing skills: %v", c.Fields.Shared)
+	if !containsString(c.Shared, "skills") {
+		t.Errorf("shared missing skills: %v", c.Shared)
 	}
-	if !containsString(c.Fields.Isolated, "projects") {
-		t.Errorf("isolated missing projects: %v", c.Fields.Isolated)
+	if !containsString(c.Isolated, "projects") {
+		t.Errorf("isolated missing projects: %v", c.Isolated)
 	}
-	if !containsString(c.Fields.Transient, "cache") {
-		t.Errorf("transient missing cache: %v", c.Fields.Transient)
+	if !containsString(c.Export.Exclude, "cache") {
+		t.Errorf("export.exclude missing cache: %v", c.Export.Exclude)
 	}
 }
 
@@ -38,7 +38,7 @@ func TestRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "config.toml")
 	in := Default()
-	in.Fields.Shared = append(in.Fields.Shared, "custom")
+	in.Shared = append(in.Shared, "custom")
 	if err := Save(p, in); err != nil {
 		t.Fatalf("save: %v", err)
 	}

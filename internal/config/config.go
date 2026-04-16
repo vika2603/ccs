@@ -9,22 +9,22 @@ import (
 )
 
 type Config struct {
-	Version int    `toml:"version"`
-	Fields  Fields `toml:"fields"`
-	Launch  Launch `toml:"launch"`
+	Version  int      `toml:"version"`
+	Shared   []string `toml:"shared"`
+	Isolated []string `toml:"isolated"`
+	Export   Export   `toml:"export"`
+	Launch   Launch   `toml:"launch"`
 }
 
-type Fields struct {
-	Shared    []string `toml:"shared"`
-	Isolated  []string `toml:"isolated"`
-	Transient []string `toml:"transient"`
+type Export struct {
+	Exclude []string `toml:"exclude"`
 }
 
 type Launch struct {
 	Command []string `toml:"command"`
 }
 
-const supportedVersion = 1
+const supportedVersion = 2
 
 func Load(path string) (Config, error) {
 	b, err := os.ReadFile(path)
@@ -44,8 +44,13 @@ func Load(path string) (Config, error) {
 	if c.Version > supportedVersion {
 		return Config{}, fmt.Errorf("config version %d is newer than this ccs (%d)", c.Version, supportedVersion)
 	}
-	if len(c.Fields.Shared) == 0 && len(c.Fields.Isolated) == 0 && len(c.Fields.Transient) == 0 {
-		c.Fields = Default().Fields
+	if len(c.Shared) == 0 && len(c.Isolated) == 0 {
+		d := Default()
+		c.Shared = d.Shared
+		c.Isolated = d.Isolated
+		if len(c.Export.Exclude) == 0 {
+			c.Export = d.Export
+		}
 	}
 	return c, nil
 }

@@ -20,7 +20,7 @@ func TestScanProfileClassifiesAndExcludesCredentialsFile(t *testing.T) {
 	mustWrite(t, filepath.Join(dir, "my-notes.md"), "user content")
 	mustMkdir(t, filepath.Join(dir, "scratch"))
 
-	reg := NewRegistry(config.Default().Fields)
+	reg := NewRegistry(config.Default())
 	entries, err := ScanProfile(dir, reg)
 	if err != nil {
 		t.Fatalf("ScanProfile: %v", err)
@@ -43,7 +43,7 @@ func TestScanProfileClassifiesAndExcludesCredentialsFile(t *testing.T) {
 		"CLAUDE.md":    {Shared, KindFile, false},
 		"projects":     {Isolated, KindDir, false},
 		".claude.json": {Isolated, KindFile, false},
-		"cache":        {Transient, KindDir, false},
+		"cache":        {Isolated, KindDir, false},
 		"my-notes.md":  {Isolated, KindFile, true},
 		"scratch":      {Isolated, KindDir, true},
 	}
@@ -70,7 +70,7 @@ func TestScanProfileComputesSizeAndCount(t *testing.T) {
 	mustMkdir(t, filepath.Join(dir, "skills", "nested"))
 	mustWrite(t, filepath.Join(dir, "skills", "nested", "c.md"), "CCC")
 
-	reg := NewRegistry(config.Default().Fields)
+	reg := NewRegistry(config.Default())
 	entries, err := ScanProfile(dir, reg)
 	if err != nil {
 		t.Fatalf("ScanProfile: %v", err)

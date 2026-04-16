@@ -36,7 +36,7 @@ func newExportCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			reg := fields.NewRegistry(cfg.Fields)
+			reg := fields.NewRegistry(cfg)
 
 			profileDir := p.ProfilePath(name)
 			if _, err := os.Stat(profileDir); err != nil {
@@ -59,9 +59,16 @@ func newExportCmd() *cobra.Command {
 				if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
 					return fmt.Errorf("-i requires a TTY on stdin and stdout; drop -i and use --full or --with-credentials")
 				}
-				items, err := fields.ScanProfile(profileDir, reg)
+				rawItems, err := fields.ScanProfile(profileDir, reg)
 				if err != nil {
 					return fmt.Errorf("scan profile: %w", err)
+				}
+				items := rawItems[:0]
+				for _, it := range rawItems {
+					if reg.IsExcludedFromExport(it.Name) {
+						continue
+					}
+					items = append(items, it)
 				}
 				seed := fields.PresetSelection(items, seedPreset)
 				if len(seed.Entries) == 0 && !seed.Credentials {
@@ -130,9 +137,9 @@ func newExportCmd() *cobra.Command {
 				IncludesCredentials: includeCredentials,
 				IncludesHistory:     includesHistoryFlag,
 				Fields: map[string][]string{
-					"shared":    cfg.Fields.Shared,
-					"isolated":  cfg.Fields.Isolated,
-					"transient": cfg.Fields.Transient,
+					"shared":   cfg.Shared,
+					"isolated": cfg.Isolated,
+					"excluded": cfg.Export.Exclude,
 				},
 			}
 			opts := archive.PackOptions{

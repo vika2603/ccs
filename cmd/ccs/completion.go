@@ -28,10 +28,10 @@ func completeFieldNames(_ *cobra.Command, _ []string, _ string) ([]string, cobra
 	if err != nil {
 		return nil, cobra.ShellCompDirectiveError
 	}
-	out := make([]string, 0, len(cfg.Fields.Shared)+len(cfg.Fields.Isolated)+len(cfg.Fields.Transient))
-	out = append(out, cfg.Fields.Shared...)
-	out = append(out, cfg.Fields.Isolated...)
-	out = append(out, cfg.Fields.Transient...)
+	out := make([]string, 0, len(cfg.Shared)+len(cfg.Isolated)+len(cfg.Export.Exclude))
+	out = append(out, cfg.Shared...)
+	out = append(out, cfg.Isolated...)
+	out = append(out, cfg.Export.Exclude...)
 	return out, cobra.ShellCompDirectiveNoFileComp
 }
 

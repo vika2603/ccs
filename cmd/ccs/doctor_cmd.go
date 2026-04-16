@@ -26,8 +26,8 @@ func newDoctorCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			configured := fields.NewRegistry(cfg.Fields)
-			defaults := fields.NewRegistry(config.Default().Fields)
+			configured := fields.NewRegistry(cfg)
+			defaults := fields.NewRegistry(config.Default())
 			kc := newDoctorKeychainLister()
 			findings, err := doctor.NewChecker(p, configured, defaults, kc, defaultClaudePath()).Check()
 			if err != nil {

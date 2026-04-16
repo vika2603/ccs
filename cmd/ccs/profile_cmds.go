@@ -24,7 +24,7 @@ func manager() (profile.Manager, layout.Paths, error) {
 	if err != nil {
 		return profile.Manager{}, p, err
 	}
-	reg := fields.NewRegistry(cfg.Fields)
+	reg := fields.NewRegistry(cfg)
 	return profile.NewManager(p, reg).WithCreds(creds.New()), p, nil
 }
 

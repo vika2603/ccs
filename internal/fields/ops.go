@@ -30,8 +30,7 @@ func NewOps(p layout.Paths, r *Registry) Ops {
 }
 
 func (o Ops) Fork(profile, field string) error {
-	class, ok := o.registry.lookupShared(field)
-	if !ok {
+	if _, ok := o.registry.lookupShared(field); !ok {
 		return fmt.Errorf("field %q is not configured as shared", field)
 	}
 	profileDir := o.paths.ProfilePath(profile)
@@ -52,15 +51,18 @@ func (o Ops) Fork(profile, field string) error {
 	if target != sharedPath {
 		return fmt.Errorf("symlink points to %q, not the expected shared path %q", target, sharedPath)
 	}
+	kind, err := detectKind(sharedPath)
+	if err != nil {
+		return err
+	}
 	if err := os.Remove(linkPath); err != nil {
 		return err
 	}
-	return copyByKind(sharedPath, linkPath, class.Kind)
+	return copyByKind(sharedPath, linkPath, kind)
 }
 
 func (o Ops) Share(profile, field string, out io.Writer, in io.Reader) error {
-	class, ok := o.registry.lookupShared(field)
-	if !ok {
+	if _, ok := o.registry.lookupShared(field); !ok {
 		return fmt.Errorf("field %q is not configured as shared", field)
 	}
 	profileDir := o.paths.ProfilePath(profile)
@@ -74,7 +76,11 @@ func (o Ops) Share(profile, field string, out io.Writer, in io.Reader) error {
 	if info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("%q is already linked to shared; nothing to share", linkPath)
 	}
-	nonEmpty, err := sharedHasContent(sharedPath, class.Kind)
+	kind, err := detectKind(linkPath)
+	if err != nil {
+		return err
+	}
+	nonEmpty, err := sharedHasContent(sharedPath)
 	if err != nil {
 		return err
 	}
@@ -96,7 +102,7 @@ func (o Ops) Share(profile, field string, out io.Writer, in io.Reader) error {
 	} else {
 		_ = os.RemoveAll(sharedPath)
 	}
-	if err := copyByKind(linkPath, sharedPath, class.Kind); err != nil {
+	if err := copyByKind(linkPath, sharedPath, kind); err != nil {
 		return err
 	}
 	if err := os.RemoveAll(linkPath); err != nil {
@@ -128,7 +134,7 @@ func (r *Registry) lookupShared(name string) (Classification, bool) {
 	return c, ok
 }
 
-func sharedHasContent(path string, kind Kind) (bool, error) {
+func sharedHasContent(path string) (bool, error) {
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
@@ -136,17 +142,14 @@ func sharedHasContent(path string, kind Kind) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if kind == KindFile {
-		return info.Size() > 0, nil
+	if info.IsDir() {
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			return false, err
+		}
+		return len(entries) > 0, nil
 	}
-	if !info.IsDir() {
-		return true, nil
-	}
-	entries, err := os.ReadDir(path)
-	if err != nil {
-		return false, err
-	}
-	return len(entries) > 0, nil
+	return info.Size() > 0, nil
 }
 
 func copyByKind(src, dst string, kind Kind) error {

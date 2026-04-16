@@ -51,7 +51,7 @@ func TestImportEntriesSharedSymlinksIsolatedCopies(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reg := NewRegistry(config.Default().Fields)
+	reg := NewRegistry(config.Default())
 	prompter := &stubPrompter{}
 	if err := ImportEntries(src, dst, shared, reg, prompter, false); err != nil {
 		t.Fatalf("ImportEntries: %v", err)
@@ -86,7 +86,7 @@ func TestImportEntriesSharedConflictRoutesThroughPrompter(t *testing.T) {
 	os.MkdirAll(filepath.Join(shared, "skills"), 0o755)
 	os.WriteFile(filepath.Join(shared, "skills", "existing.md"), []byte("OLD"), 0o644)
 
-	reg := NewRegistry(config.Default().Fields)
+	reg := NewRegistry(config.Default())
 
 	aborter := &stubPrompter{overwrite: false}
 	if err := ImportEntries(src, dst, shared, reg, aborter, false); err == nil {
@@ -121,7 +121,7 @@ func TestImportEntriesUnknownReportedViaPrompter(t *testing.T) {
 	os.MkdirAll(dst, 0o755)
 	os.MkdirAll(shared, 0o755)
 
-	reg := NewRegistry(config.Default().Fields)
+	reg := NewRegistry(config.Default())
 	prompter := &stubPrompter{}
 	if err := ImportEntries(src, dst, shared, reg, prompter, false); err != nil {
 		t.Fatalf("ImportEntries: %v", err)

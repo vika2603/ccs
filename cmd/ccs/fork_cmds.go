@@ -41,7 +41,7 @@ func opsForActive(name string) (fields.Ops, string, error) {
 		}
 		name = active
 	}
-	reg := fields.NewRegistry(cfg.Fields)
+	reg := fields.NewRegistry(cfg)
 	return fields.NewOps(p, reg), name, nil
 }
 

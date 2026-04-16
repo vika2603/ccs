@@ -19,8 +19,8 @@ func setup(t *testing.T, kc KeychainLister) (Checker, layout.Paths) {
 	p := layout.New(home)
 	os.MkdirAll(p.SharedDir(), 0o755)
 	os.MkdirAll(p.ProfilesDir(), 0o755)
-	configured := fields.NewRegistry(config.Default().Fields)
-	defaults := fields.NewRegistry(config.Default().Fields)
+	configured := fields.NewRegistry(config.Default())
+	defaults := fields.NewRegistry(config.Default())
 	return NewChecker(p, configured, defaults, kc, "/nonexistent/default/claude"), p
 }
 
@@ -84,8 +84,8 @@ func TestDetectsClassificationDrift(t *testing.T) {
 	p := layout.New(home)
 	os.MkdirAll(p.SharedDir(), 0o755)
 	os.MkdirAll(p.ProfilesDir(), 0o755)
-	configured := fields.NewRegistry(config.Fields{Isolated: []string{"skills"}})
-	defaults := fields.NewRegistry(config.Fields{Shared: []string{"skills"}})
+	configured := fields.NewRegistry(config.Config{Isolated: []string{"skills"}})
+	defaults := fields.NewRegistry(config.Config{Shared: []string{"skills"}})
 	c := NewChecker(p, configured, defaults, fakeKeychain{}, "/nonexistent/default/claude")
 	findings, _ := c.Check()
 	found := false
@@ -96,6 +96,27 @@ func TestDetectsClassificationDrift(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected ClassificationDrift for 'skills', got: %v", findings)
+	}
+}
+
+func TestUserAdditionsDoNotDrift(t *testing.T) {
+	home := t.TempDir()
+	p := layout.New(home)
+	os.MkdirAll(p.SharedDir(), 0o755)
+	os.MkdirAll(p.ProfilesDir(), 0o755)
+	configured := fields.NewRegistry(config.Config{
+		Shared:   []string{"skills", "statusline.sh", "file-history"},
+		Isolated: []string{"session-env"},
+	})
+	defaults := fields.NewRegistry(config.Config{
+		Shared: []string{"skills"},
+	})
+	c := NewChecker(p, configured, defaults, fakeKeychain{}, "/nonexistent/default/claude")
+	findings, _ := c.Check()
+	for _, f := range findings {
+		if f.Kind == ClassificationDrift {
+			t.Errorf("user-added field %q should not be flagged as drift", f.Detail)
+		}
 	}
 }
 

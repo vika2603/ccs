@@ -120,27 +120,18 @@ func (c Checker) classificationDrift() []Finding {
 	var out []Finding
 	configured := c.configured.All()
 	defaults := c.defaults.All()
-	seen := map[string]bool{}
 	for name, want := range defaults {
 		got, ok := configured[name]
-		if !ok || got.Category != want.Category {
+		if !ok {
+			continue
+		}
+		if got.Category != want.Category {
 			out = append(out, Finding{
 				Kind:   ClassificationDrift,
 				Detail: name,
 				Path:   c.paths.ConfigFile(),
 			})
 		}
-		seen[name] = true
-	}
-	for name := range configured {
-		if seen[name] {
-			continue
-		}
-		out = append(out, Finding{
-			Kind:   ClassificationDrift,
-			Detail: name,
-			Path:   c.paths.ConfigFile(),
-		})
 	}
 	return out
 }

@@ -15,7 +15,6 @@ func TestPresetSelection(t *testing.T) {
 		{Name: ".claude.json", Category: Isolated, Kind: KindFile},
 		{Name: "projects", Category: Isolated, Kind: KindDir},
 		{Name: "scratch", Category: Isolated, Kind: KindDir, IsUnknown: true},
-		{Name: "cache", Category: Transient, Kind: KindDir},
 	}
 
 	cases := map[Preset]PresetSeed{
@@ -59,10 +58,17 @@ func TestPresetSelectionMatchesSelectExportMaterial(t *testing.T) {
 	mustWrite(t, filepath.Join(profile, ".credentials.json"), "secret")
 	mustMkdir(t, filepath.Join(profile, "cache"))
 
-	reg := NewRegistry(config.Default().Fields)
-	items, err := ScanProfile(profile, reg)
+	reg := NewRegistry(config.Default())
+	rawItems, err := ScanProfile(profile, reg)
 	if err != nil {
 		t.Fatalf("scan: %v", err)
+	}
+	items := rawItems[:0]
+	for _, it := range rawItems {
+		if reg.IsExcludedFromExport(it.Name) {
+			continue
+		}
+		items = append(items, it)
 	}
 
 	cases := []struct {

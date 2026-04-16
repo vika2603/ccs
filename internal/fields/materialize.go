@@ -70,7 +70,7 @@ func ImportEntries(srcProfileDir, dstProfileDir, sharedDir string, reg *Registry
 			if err := importSharedEntry(name, srcPath, sharedDir, dstProfileDir, prompter, move); err != nil {
 				return err
 			}
-		case Isolated, Transient:
+		case Isolated:
 			if err := moveOrCopy(srcPath, filepath.Join(dstProfileDir, name), move); err != nil {
 				return err
 			}
@@ -195,24 +195,21 @@ func SelectExportMaterial(profileDir string, reg *Registry, mode ExportMode) ([]
 		if name == ".credentials.json" || name == ".claude.json" {
 			continue
 		}
-		class := reg.Describe(name)
-		if class.Category == Transient {
+		if reg.IsExcludedFromExport(name) {
 			continue
 		}
+		class := reg.Describe(name)
 		if class.Category == Isolated && mode != ExportFull {
 			continue
 		}
-		info, err := e.Info()
+		path := filepath.Join(profileDir, name)
+		kind, err := detectKind(path)
 		if err != nil {
 			return nil, err
 		}
-		kind := KindFile
-		if info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			kind = KindDir
-		}
 		out = append(out, Entry{
 			Name: name,
-			Path: filepath.Join(profileDir, name),
+			Path: path,
 			Kind: kind,
 		})
 	}

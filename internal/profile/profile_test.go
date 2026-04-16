@@ -16,7 +16,7 @@ func setup(t *testing.T) (Manager, layout.Paths) {
 	home := t.TempDir()
 	p := layout.New(home)
 	os.MkdirAll(p.Root(), 0o755)
-	reg := fields.NewRegistry(config.Default().Fields)
+	reg := fields.NewRegistry(config.Default())
 	return NewManager(p, reg), p
 }
 

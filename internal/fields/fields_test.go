@@ -9,7 +9,7 @@ import (
 )
 
 func TestDescribeIncludesCategoryAndKind(t *testing.T) {
-	r := NewRegistry(config.Default().Fields)
+	r := NewRegistry(config.Default())
 	cases := map[string]Classification{
 		"skills":            {Name: "skills", Category: Shared, Kind: KindDir},
 		"CLAUDE.md":         {Name: "CLAUDE.md", Category: Shared, Kind: KindFile},
@@ -21,7 +21,7 @@ func TestDescribeIncludesCategoryAndKind(t *testing.T) {
 		"policy-limits.json":        {Name: "policy-limits.json", Category: Isolated, Kind: KindFile},
 		"backups":                   {Name: "backups", Category: Isolated, Kind: KindDir},
 		"sessions":                  {Name: "sessions", Category: Isolated, Kind: KindDir},
-		"cache":                     {Name: "cache", Category: Transient, Kind: KindDir},
+		"cache":                     {Name: "cache", Category: Isolated, Kind: KindDir},
 		"unknown":                   {Name: "unknown", Category: Isolated, Kind: KindDir},
 	}
 	for name, want := range cases {
@@ -32,8 +32,41 @@ func TestDescribeIncludesCategoryAndKind(t *testing.T) {
 	}
 }
 
+func TestInferKindExtensionHeuristic(t *testing.T) {
+	cases := map[string]Kind{
+		"statusline.sh": KindFile,
+		"config.yaml":   KindFile,
+		"notes.md":      KindFile,
+		"skills":        KindDir,
+		"backups":       KindDir,
+		"unknown":       KindDir,
+	}
+	for name, want := range cases {
+		if got := inferKind(name); got != want {
+			t.Errorf("inferKind(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+func TestCreateSharedTargetsCreatesRegularFileForExtensionName(t *testing.T) {
+	dir := t.TempDir()
+	entries := []Classification{
+		{Name: "statusline.sh", Category: Shared, Kind: inferKind("statusline.sh")},
+	}
+	if err := CreateSharedTargets(dir, entries); err != nil {
+		t.Fatalf("CreateSharedTargets: %v", err)
+	}
+	info, err := os.Lstat(filepath.Join(dir, "statusline.sh"))
+	if err != nil {
+		t.Fatalf("lstat: %v", err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Fatalf("statusline.sh should be a regular file, got %v", info.Mode())
+	}
+}
+
 func TestDescribeReportsUnknown(t *testing.T) {
-	r := NewRegistry(config.Default().Fields)
+	r := NewRegistry(config.Default())
 	if !r.IsUnknown("novel-entry") {
 		t.Fatalf("expected novel-entry to be flagged unknown")
 	}
@@ -43,7 +76,7 @@ func TestDescribeReportsUnknown(t *testing.T) {
 }
 
 func TestListShared(t *testing.T) {
-	r := NewRegistry(config.Default().Fields)
+	r := NewRegistry(config.Default())
 	got := r.Shared()
 	if len(got) == 0 {
 		t.Fatalf("expected non-empty shared list")
@@ -82,7 +115,7 @@ func TestSelectExportMaterialFiltersByMode(t *testing.T) {
 	os.WriteFile(filepath.Join(profile, ".claude.json"), []byte(`{"oauthAccount":{"email":"x"}}`), 0o600)
 	os.MkdirAll(filepath.Join(profile, "cache"), 0o755)
 
-	reg := NewRegistry(config.Default().Fields)
+	reg := NewRegistry(config.Default())
 	defEntries, err := SelectExportMaterial(profile, reg, ExportDefault)
 	if err != nil {
 		t.Fatalf("SelectExportMaterial(default): %v", err)

@@ -1,21 +1,23 @@
 package fields
 
-import "github.com/vika2603/ccs/internal/config"
+import (
+	"os"
+	"path/filepath"
+
+	"github.com/vika2603/ccs/internal/config"
+)
 
 type Category int
 
 const (
 	Isolated Category = iota
 	Shared
-	Transient
 )
 
 func (c Category) String() string {
 	switch c {
 	case Shared:
 		return "shared"
-	case Transient:
-		return "transient"
 	default:
 		return "isolated"
 	}
@@ -60,19 +62,29 @@ type Entry struct {
 type Registry struct {
 	shared     map[string]Classification
 	isolated   map[string]Classification
-	transient  map[string]Classification
+	excluded   map[string]struct{}
 	known      map[string]Classification
 	sharedList []Classification
 }
 
-func NewRegistry(f config.Fields) *Registry {
+func NewRegistry(cfg config.Config) *Registry {
 	r := &Registry{
-		shared:    set(f.Shared, Shared),
-		isolated:  set(f.Isolated, Isolated),
-		transient: set(f.Transient, Transient),
-		known:     map[string]Classification{},
+		shared:   set(cfg.Shared, Shared),
+		isolated: set(cfg.Isolated, Isolated),
+		excluded: make(map[string]struct{}, len(cfg.Export.Exclude)),
+		known:    map[string]Classification{},
 	}
-	for _, bucket := range []map[string]Classification{r.shared, r.isolated, r.transient} {
+	for _, name := range cfg.Export.Exclude {
+		r.excluded[name] = struct{}{}
+		if _, ok := r.shared[name]; ok {
+			continue
+		}
+		if _, ok := r.isolated[name]; ok {
+			continue
+		}
+		r.isolated[name] = Classification{Name: name, Category: Isolated, Kind: inferKind(name)}
+	}
+	for _, bucket := range []map[string]Classification{r.shared, r.isolated} {
 		for name, class := range bucket {
 			r.known[name] = class
 			if class.Category == Shared {
@@ -91,26 +103,53 @@ func set(vs []string, category Category) map[string]Classification {
 	return m
 }
 
+var kindOverrides = map[string]Kind{
+	"CLAUDE.md":                 KindFile,
+	"settings.json":             KindFile,
+	"history.jsonl":             KindFile,
+	".credentials.json":         KindFile,
+	".claude.json":              KindFile,
+	"mcp-needs-auth-cache.json": KindFile,
+	"policy-limits.json":        KindFile,
+}
+
 func inferKind(name string) Kind {
-	switch name {
-	case "CLAUDE.md",
-		"settings.json",
-		"history.jsonl",
-		".credentials.json",
-		".claude.json",
-		"mcp-needs-auth-cache.json",
-		"policy-limits.json":
-		return KindFile
-	default:
-		return KindDir
+	if k, ok := kindOverrides[name]; ok {
+		return k
 	}
+	if filepath.Ext(name) != "" {
+		return KindFile
+	}
+	return KindDir
+}
+
+func detectKind(path string) (Kind, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return KindDir, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return KindDir, err
+		}
+		ti, err := os.Stat(target)
+		if err != nil {
+			return KindDir, err
+		}
+		if ti.IsDir() {
+			return KindDir, nil
+		}
+		return KindFile, nil
+	}
+	if info.IsDir() {
+		return KindDir, nil
+	}
+	return KindFile, nil
 }
 
 func (r *Registry) Describe(name string) Classification {
 	if class, ok := r.shared[name]; ok {
-		return class
-	}
-	if class, ok := r.transient[name]; ok {
 		return class
 	}
 	if class, ok := r.isolated[name]; ok {
@@ -126,6 +165,11 @@ func (r *Registry) Classify(name string) Category {
 func (r *Registry) IsUnknown(name string) bool {
 	_, ok := r.known[name]
 	return !ok
+}
+
+func (r *Registry) IsExcludedFromExport(name string) bool {
+	_, ok := r.excluded[name]
+	return ok
 }
 
 func (r *Registry) Shared() []Classification {

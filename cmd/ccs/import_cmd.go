@@ -38,7 +38,7 @@ func newImportCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			reg := fields.NewRegistry(cfg.Fields)
+			reg := fields.NewRegistry(cfg)
 
 			if _, err := os.Stat(src); err != nil {
 				return err

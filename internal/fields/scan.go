@@ -27,21 +27,20 @@ func ScanProfile(profileDir string, reg *Registry) ([]ProfileEntry, error) {
 			continue
 		}
 		class := reg.Describe(name)
-		info, err := de.Info()
+		path := filepath.Join(profileDir, name)
+		kind, err := detectKind(path)
 		if err != nil {
 			return nil, err
 		}
-		kind := KindFile
 		size := int64(0)
 		count := 0
-		switch {
-		case info.Mode()&os.ModeSymlink != 0:
-			kind = KindDir
-			size, count = measureDir(filepath.Join(profileDir, name))
-		case info.IsDir():
-			kind = KindDir
-			size, count = measureDir(filepath.Join(profileDir, name))
-		default:
+		if kind == KindDir {
+			size, count = measureDir(path)
+		} else {
+			info, err := de.Info()
+			if err != nil {
+				return nil, err
+			}
 			size = info.Size()
 		}
 		out = append(out, ProfileEntry{
