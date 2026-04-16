@@ -1,10 +1,120 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/vika2603/ccs/internal/creds"
 )
+
+type fakeCredStore struct {
+	entries map[string][]byte
+	deleted map[string]bool
+}
+
+func newFakeCredStore() *fakeCredStore {
+	return &fakeCredStore{entries: map[string][]byte{}, deleted: map[string]bool{}}
+}
+
+func (f *fakeCredStore) Read(p string) ([]byte, error) {
+	if b, ok := f.entries[p]; ok {
+		return b, nil
+	}
+	return nil, creds.ErrNotFound
+}
+
+func (f *fakeCredStore) Write(p string, b []byte) error {
+	f.entries[p] = append([]byte(nil), b...)
+	return nil
+}
+
+func (f *fakeCredStore) Delete(p string) error {
+	delete(f.entries, p)
+	f.deleted[p] = true
+	return nil
+}
+
+func (f *fakeCredStore) Exists(p string) (bool, error) {
+	_, ok := f.entries[p]
+	return ok, nil
+}
+
+func TestMaybeImportCredsPromptsAndWritesOnYes(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+	store := newFakeCredStore()
+	srcAbs, _ := filepath.Abs(srcDir)
+	dstAbs, _ := filepath.Abs(dstDir)
+	store.entries[srcAbs] = []byte("TOKEN")
+
+	in := strings.NewReader("y\n")
+	var out, errOut bytes.Buffer
+	if err := maybeImportCreds(srcDir, dstDir, "work", false, store, in, &out, &errOut); err != nil {
+		t.Fatalf("maybeImportCreds: %v", err)
+	}
+	if got := string(store.entries[dstAbs]); got != "TOKEN" {
+		t.Errorf("expected TOKEN written at dst, got %q", got)
+	}
+	if store.deleted[srcAbs] {
+		t.Errorf("did not expect source delete when move=false")
+	}
+	if !strings.Contains(out.String(), "found credentials") {
+		t.Errorf("expected prompt, got %q", out.String())
+	}
+}
+
+func TestMaybeImportCredsSkipsOnNo(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+	store := newFakeCredStore()
+	srcAbs, _ := filepath.Abs(srcDir)
+	dstAbs, _ := filepath.Abs(dstDir)
+	store.entries[srcAbs] = []byte("TOKEN")
+
+	in := strings.NewReader("n\n")
+	var out, errOut bytes.Buffer
+	if err := maybeImportCreds(srcDir, dstDir, "work", false, store, in, &out, &errOut); err != nil {
+		t.Fatalf("maybeImportCreds: %v", err)
+	}
+	if _, ok := store.entries[dstAbs]; ok {
+		t.Errorf("expected dst untouched on no")
+	}
+	if !strings.Contains(out.String(), "skipped") {
+		t.Errorf("expected skip message, got %q", out.String())
+	}
+}
+
+func TestMaybeImportCredsSilentWhenSourceMissing(t *testing.T) {
+	store := newFakeCredStore()
+	in := strings.NewReader("")
+	var out, errOut bytes.Buffer
+	if err := maybeImportCreds(t.TempDir(), t.TempDir(), "work", false, store, in, &out, &errOut); err != nil {
+		t.Fatalf("maybeImportCreds: %v", err)
+	}
+	if out.Len() != 0 || errOut.Len() != 0 {
+		t.Errorf("expected silent, got out=%q err=%q", out.String(), errOut.String())
+	}
+}
+
+func TestMaybeImportCredsMoveDeletesSource(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+	store := newFakeCredStore()
+	srcAbs, _ := filepath.Abs(srcDir)
+	store.entries[srcAbs] = []byte("TOKEN")
+
+	in := strings.NewReader("y\n")
+	var out, errOut bytes.Buffer
+	if err := maybeImportCreds(srcDir, dstDir, "work", true, store, in, &out, &errOut); err != nil {
+		t.Fatalf("maybeImportCreds: %v", err)
+	}
+	if !store.deleted[srcAbs] {
+		t.Errorf("expected source deletion when move=true")
+	}
+}
 
 func TestImportExistingDir(t *testing.T) {
 	home := t.TempDir()

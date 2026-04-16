@@ -1,14 +1,18 @@
 package main
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/vika2603/ccs/internal/config"
+	"github.com/vika2603/ccs/internal/creds"
 	"github.com/vika2603/ccs/internal/fields"
 	"github.com/vika2603/ccs/internal/layout"
 	"github.com/vika2603/ccs/internal/state"
@@ -49,16 +53,60 @@ func newImportCmd() *cobra.Command {
 				return err
 			}
 
+			in := bufferedStdin(cmd.InOrStdin())
 			prompter := importPrompter{
 				out: cmd.OutOrStdout(),
-				in:  bufferedStdin(cmd.InOrStdin()),
+				in:  in,
 				err: cmd.ErrOrStderr(),
 			}
-			return fields.ImportEntries(src, dst, p.SharedDir(), reg, prompter, move)
+			if err := fields.ImportEntries(src, dst, p.SharedDir(), reg, prompter, move); err != nil {
+				return err
+			}
+			return maybeImportCreds(src, dst, name, move, creds.New(), in, cmd.OutOrStdout(), cmd.ErrOrStderr())
 		},
 	}
 	cmd.Flags().BoolVar(&move, "move", false, "move files instead of copying")
 	return cmd
+}
+
+func maybeImportCreds(src, dst, name string, move bool, store creds.Store, in io.Reader, out, errOut io.Writer) error {
+	absSrc, err := filepath.Abs(src)
+	if err != nil {
+		return nil
+	}
+	absDst, err := filepath.Abs(dst)
+	if err != nil {
+		return nil
+	}
+	data, err := store.Read(absSrc)
+	if errors.Is(err, creds.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		fmt.Fprintf(errOut, "warning: could not read source credentials: %v\n", err)
+		return nil
+	}
+	br, ok := in.(*bufio.Reader)
+	if !ok {
+		br = bufio.NewReader(in)
+	}
+	fmt.Fprintf(out, "found credentials for %s; import to profile %q? (y/N) ", src, name)
+	line, _ := br.ReadString('\n')
+	ans := strings.ToLower(strings.TrimSpace(line))
+	if ans != "y" && ans != "yes" {
+		fmt.Fprintln(out, "skipped credentials")
+		return nil
+	}
+	if err := store.Write(absDst, data); err != nil {
+		fmt.Fprintf(errOut, "warning: could not write credentials: %v\n", err)
+		return nil
+	}
+	if move {
+		if err := store.Delete(absSrc); err != nil {
+			fmt.Fprintf(errOut, "warning: could not delete source credentials: %v\n", err)
+		}
+	}
+	return nil
 }
 
 type importPrompter struct {
