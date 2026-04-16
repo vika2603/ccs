@@ -8,7 +8,7 @@ profiles until you fork them.
 ## Install
 
 ```sh
-curl -fsSL https://github.com/vika2603/ccs/releases/latest/download/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/vika2603/ccs/main/install.sh | sh
 ```
 
 Add to `~/.zshrc` or `~/.bashrc`:
