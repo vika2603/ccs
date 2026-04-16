@@ -11,12 +11,17 @@ import (
 type Config struct {
 	Version int    `toml:"version"`
 	Fields  Fields `toml:"fields"`
+	Launch  Launch `toml:"launch"`
 }
 
 type Fields struct {
 	Shared    []string `toml:"shared"`
 	Isolated  []string `toml:"isolated"`
 	Transient []string `toml:"transient"`
+}
+
+type Launch struct {
+	Command []string `toml:"command"`
 }
 
 const supportedVersion = 1

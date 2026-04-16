@@ -7,12 +7,13 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/vika2603/ccs/internal/config"
 	"github.com/vika2603/ccs/internal/runx"
 	"github.com/vika2603/ccs/internal/state"
 )
 
 func runClaudeForProfile(name string, rest []string) error {
-	m, _, err := manager()
+	m, p, err := manager()
 	if err != nil {
 		return err
 	}
@@ -21,7 +22,15 @@ func runClaudeForProfile(name string, rest []string) error {
 		return err
 	}
 	if len(rest) == 0 {
-		rest = []string{"claude"}
+		cfg, err := config.Load(p.ConfigFile())
+		if err != nil {
+			return err
+		}
+		if len(cfg.Launch.Command) > 0 {
+			rest = append([]string{}, cfg.Launch.Command...)
+		} else {
+			rest = []string{"claude"}
+		}
 	}
 	bin, err := runx.Resolve(rest)
 	if err != nil {
