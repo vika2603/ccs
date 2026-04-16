@@ -1,0 +1,34 @@
+[[ $- == *i* ]] || return 0
+[[ -n ${_CCS_SHELL_INIT_DONE-} ]] && return 0
+_CCS_SHELL_INIT_DONE=1
+
+ccs() {
+  if [ "$1" = use ]; then
+    shift
+    eval "$(command ccs __shell_use "$@")"
+  else
+    command ccs "$@"
+  fi
+}
+
+_ccs_hook() {
+  [ -n "$CCS_DISABLE_HOOK" ] && return
+  if [ -n "$CLAUDE_CONFIG_DIR" ] && [ -z "$CCS_MANAGED_CCD" ]; then
+    return
+  fi
+  local want
+  want="$(command ccs path 2>/dev/null || true)"
+  if [ -n "$want" ]; then
+    if [ "$CLAUDE_CONFIG_DIR" != "$want" ]; then
+      export CLAUDE_CONFIG_DIR="$want"
+      export CCS_MANAGED_CCD=1
+    fi
+  else
+    if [ -n "$CCS_MANAGED_CCD" ]; then
+      unset CLAUDE_CONFIG_DIR CCS_MANAGED_CCD
+    fi
+  fi
+}
+
+typeset -ga precmd_functions
+(( ${precmd_functions[(Ie)_ccs_hook]} )) || precmd_functions+=(_ccs_hook)

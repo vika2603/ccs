@@ -1,0 +1,25 @@
+project_name: ccs
+before:
+  hooks:
+    - go mod tidy
+builds:
+  - id: ccs
+    main: ./cmd/ccs
+    binary: ccs
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.Version={{.Version}}
+archives:
+  - format: tar.gz
+    name_template: "ccs_{{ .Os }}_{{ .Arch }}"
+checksum:
+  name_template: "SHA256SUMS"
+release:
+  draft: true
