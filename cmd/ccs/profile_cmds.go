@@ -126,7 +126,6 @@ func newPathCmd() *cobra.Command {
 }
 
 func newRmCmd() *cobra.Command {
-	var withKeychain bool
 	var yes bool
 	var force bool
 	cmd := &cobra.Command{
@@ -151,7 +150,7 @@ func newRmCmd() *cobra.Command {
 					return fmt.Errorf("aborted")
 				}
 			}
-			if err := m.Remove(name, withKeychain); err != nil {
+			if err := m.Remove(name); err != nil {
 				return err
 			}
 			if active == name {
@@ -160,7 +159,6 @@ func newRmCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().BoolVarP(&withKeychain, "keychain", "k", false, "also delete the Keychain entry")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "skip confirmation")
 	cmd.Flags().BoolVar(&force, "force", false, "allow removing the active profile")
 	return cmd

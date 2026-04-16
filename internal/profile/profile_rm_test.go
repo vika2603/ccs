@@ -9,7 +9,7 @@ func TestRemoveDeletesProfileDir(t *testing.T) {
 	m, p := setup(t)
 	m.Init()
 	m.New("work")
-	if err := m.Remove("work", false); err != nil {
+	if err := m.Remove("work"); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
 	if _, err := os.Stat(p.ProfilePath("work")); !os.IsNotExist(err) {
@@ -20,7 +20,7 @@ func TestRemoveDeletesProfileDir(t *testing.T) {
 func TestRemoveMissingIsError(t *testing.T) {
 	m, _ := setup(t)
 	m.Init()
-	if err := m.Remove("nope", false); err == nil {
+	if err := m.Remove("nope"); err == nil {
 		t.Error("expected error")
 	}
 }
@@ -40,13 +40,13 @@ func (f *fakeStore) Delete(p string) error {
 	return nil
 }
 
-func TestRemoveWithKCallsCreds(t *testing.T) {
+func TestRemoveAlwaysDeletesCredentials(t *testing.T) {
 	m, p := setup(t)
 	m.Init()
 	m.New("work")
 	f := &fakeStore{}
 	m2 := m.WithCreds(f)
-	if err := m2.Remove("work", true); err != nil {
+	if err := m2.Remove("work"); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
 	if !f.deleted[p.ProfilePath("work")] {

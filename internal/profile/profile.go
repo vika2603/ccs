@@ -25,7 +25,7 @@ func (m Manager) WithCreds(s creds.Store) Manager {
 	return m
 }
 
-func (m Manager) Remove(name string, withKeychain bool) error {
+func (m Manager) Remove(name string) error {
 	dir := m.paths.ProfilePath(name)
 	if _, err := os.Stat(dir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -33,9 +33,9 @@ func (m Manager) Remove(name string, withKeychain bool) error {
 		}
 		return err
 	}
-	if withKeychain && m.creds != nil {
+	if m.creds != nil {
 		if err := m.creds.Delete(dir); err != nil {
-			return fmt.Errorf("delete credentials: %w", err)
+			fmt.Fprintf(os.Stderr, "warning: could not delete keychain entry: %v\n", err)
 		}
 	}
 	return os.RemoveAll(dir)
