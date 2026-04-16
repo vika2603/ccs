@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,11 +15,12 @@ import (
 	"github.com/vika2603/ccs/internal/creds"
 	"github.com/vika2603/ccs/internal/fields"
 	"github.com/vika2603/ccs/internal/layout"
+	"github.com/vika2603/ccs/internal/tui/picker"
 )
 
 func newExportCmd() *cobra.Command {
 	var outFile string
-	var full, withCreds bool
+	var full, withCreds, interactive bool
 	cmd := &cobra.Command{
 		Use:   "export <name>",
 		Short: "Export a profile to a tar.gz",
@@ -40,27 +42,72 @@ func newExportCmd() *cobra.Command {
 				return err
 			}
 
-			mode := fields.ExportDefault
+			seedPreset := fields.PresetDefault
 			switch {
 			case full:
-				mode = fields.ExportFull
+				seedPreset = fields.PresetFull
 			case withCreds:
-				mode = fields.ExportWithCredentials
+				seedPreset = fields.PresetWithCreds
 			}
 
-			selected, err := fields.SelectExportMaterial(profileDir, reg, mode)
-			if err != nil {
-				return fmt.Errorf("select export material: %w", err)
-			}
-			entryNames := make([]string, 0, len(selected))
-			for _, e := range selected {
-				entryNames = append(entryNames, e.Name)
-			}
-			if withCreds || full {
-				claudeJSON := filepath.Join(profileDir, ".claude.json")
-				if _, err := os.Stat(claudeJSON); err == nil {
-					entryNames = append(entryNames, ".claude.json")
+			var entryNames []string
+			var includeCredentials bool
+			includesHistoryFlag := full
+
+			if interactive {
+				if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
+					return fmt.Errorf("-i requires a TTY on stdin and stdout; drop -i and use --full or --with-credentials")
 				}
+				items, err := fields.ScanProfile(profileDir, reg)
+				if err != nil {
+					return fmt.Errorf("scan profile: %w", err)
+				}
+				seed := fields.PresetSelection(items, seedPreset)
+				if len(seed.Entries) == 0 && !seed.Credentials {
+					fmt.Fprintf(cmd.ErrOrStderr(), "ccs: nothing to export in profile %q\n", name)
+					return fmt.Errorf("nothing to export")
+				}
+				result, err := picker.RunPicker(picker.Input{
+					Items:           items,
+					SeedSelection:   seed.Entries,
+					SeedCredentials: seed.Credentials,
+					ProfileName:     name,
+					PresetLabel:     seedPreset.String(),
+				})
+				if err != nil {
+					if errors.Is(err, picker.ErrSIGINT) {
+						os.Exit(130)
+					}
+					return err
+				}
+				if result.Cancelled {
+					return fmt.Errorf("export cancelled")
+				}
+				entryNames = result.Names
+				includeCredentials = result.Credentials
+			} else {
+				mode := fields.ExportDefault
+				switch {
+				case full:
+					mode = fields.ExportFull
+				case withCreds:
+					mode = fields.ExportWithCredentials
+				}
+				selected, err := fields.SelectExportMaterial(profileDir, reg, mode)
+				if err != nil {
+					return fmt.Errorf("select export material: %w", err)
+				}
+				entryNames = make([]string, 0, len(selected))
+				for _, e := range selected {
+					entryNames = append(entryNames, e.Name)
+				}
+				if withCreds || full {
+					claudeJSON := filepath.Join(profileDir, ".claude.json")
+					if _, err := os.Stat(claudeJSON); err == nil {
+						entryNames = append(entryNames, ".claude.json")
+					}
+				}
+				includeCredentials = withCreds
 			}
 
 			sharedPaths := map[string]string{}
@@ -79,8 +126,8 @@ func newExportCmd() *cobra.Command {
 				Version:             1,
 				Profile:             name,
 				SourcePlatform:      runtime.GOOS,
-				IncludesCredentials: withCreds,
-				IncludesHistory:     full,
+				IncludesCredentials: includeCredentials,
+				IncludesHistory:     includesHistoryFlag,
 				Fields: map[string][]string{
 					"shared":    cfg.Fields.Shared,
 					"isolated":  cfg.Fields.Isolated,
@@ -97,7 +144,7 @@ func newExportCmd() *cobra.Command {
 
 			fmt.Fprintln(cmd.ErrOrStderr(), "Scope of protection: the tarball itself and manifest.json are plaintext; profile name, field classification, the user's CLAUDE.md, skills, commands, optional runtime data, and .claude.json (which carries the account identity -- email, user ID, organization/tenant identifiers) are all readable without the passphrase. Only the OAuth token is encrypted.")
 
-			if withCreds {
+			if includeCredentials {
 				data, err := creds.New().Read(profileDir)
 				if err != nil {
 					return fmt.Errorf("read credentials: %w", err)
@@ -126,6 +173,7 @@ func newExportCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&outFile, "output", "o", "", "output file (default: <name>.tar.gz)")
 	cmd.Flags().BoolVar(&full, "full", false, "include isolated runtime data (projects, todos, history.jsonl)")
 	cmd.Flags().BoolVar(&withCreds, "with-credentials", false, "include the OAuth token, passphrase-encrypted")
+	cmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "pick entries interactively (TTY required)")
 	return cmd
 }
 

@@ -162,6 +162,19 @@ func TestExportProfileFullIncludesIsolatedRuntime(t *testing.T) {
 	}
 }
 
+func TestExportInteractiveRejectsNonTTY(t *testing.T) {
+	home := t.TempDir()
+	runCmd(t, home, "init")
+	runCmd(t, home, "new", "work")
+	_, err := runCmd(t, home, "export", "work", "-i")
+	if err == nil {
+		t.Fatalf("expected -i on non-TTY to error")
+	}
+	if !strings.Contains(err.Error(), "TTY") {
+		t.Fatalf("error should mention TTY; got %q", err.Error())
+	}
+}
+
 func listTarEntries(t *testing.T, p string) []string {
 	f, _ := os.Open(p)
 	defer f.Close()
