@@ -114,6 +114,82 @@ func TestForkShareRoundTripFileField(t *testing.T) {
 	}
 }
 
+func TestRelinkCreatesMissingSymlink(t *testing.T) {
+	ops, p := setupOps(t)
+	profile := p.ProfilePath("work")
+	os.MkdirAll(profile, 0o755)
+	os.MkdirAll(p.SharedField("skills"), 0o755)
+
+	if err := ops.Relink("work", "skills"); err != nil {
+		t.Fatalf("relink: %v", err)
+	}
+	info, err := os.Lstat(filepath.Join(profile, "skills"))
+	if err != nil {
+		t.Fatalf("lstat: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("expected symlink after relink, got %v", info.Mode())
+	}
+	target, err := os.Readlink(filepath.Join(profile, "skills"))
+	if err != nil {
+		t.Fatalf("readlink: %v", err)
+	}
+	if target != p.SharedField("skills") {
+		t.Fatalf("unexpected target: %s", target)
+	}
+}
+
+func TestRelinkNoopWhenAlreadyLinked(t *testing.T) {
+	ops, p := setupOps(t)
+	profile := p.ProfilePath("work")
+	os.MkdirAll(profile, 0o755)
+	os.MkdirAll(p.SharedField("skills"), 0o755)
+	os.Symlink(p.SharedField("skills"), filepath.Join(profile, "skills"))
+
+	if err := ops.Relink("work", "skills"); err != nil {
+		t.Fatalf("relink should be a no-op on an already-linked field: %v", err)
+	}
+}
+
+func TestRelinkErrorsWhenForked(t *testing.T) {
+	ops, p := setupOps(t)
+	profile := p.ProfilePath("work")
+	os.MkdirAll(filepath.Join(profile, "skills"), 0o755)
+	os.MkdirAll(p.SharedField("skills"), 0o755)
+
+	err := ops.Relink("work", "skills")
+	if err == nil {
+		t.Fatalf("expected error when relinking a forked field")
+	}
+}
+
+func TestRelinkAllRelinksOnlyMissing(t *testing.T) {
+	ops, p := setupOps(t)
+	profile := p.ProfilePath("work")
+	os.MkdirAll(profile, 0o755)
+	os.MkdirAll(p.SharedField("skills"), 0o755)
+	os.Symlink(p.SharedField("skills"), filepath.Join(profile, "skills"))
+	os.MkdirAll(p.SharedField("commands"), 0o755)
+	os.MkdirAll(p.SharedField("agents"), 0o755)
+	os.MkdirAll(p.SharedField("plugins"), 0o755)
+	os.Symlink(p.SharedField("plugins"), filepath.Join(profile, "plugins"))
+
+	relinked, err := ops.RelinkAll("work")
+	if err != nil {
+		t.Fatalf("relinkAll: %v", err)
+	}
+	got := map[string]bool{}
+	for _, f := range relinked {
+		got[f] = true
+	}
+	if !got["commands"] || !got["agents"] {
+		t.Fatalf("expected commands+agents to be relinked, got %v", relinked)
+	}
+	if got["skills"] || got["plugins"] {
+		t.Fatalf("already-linked fields should not be re-relinked, got %v", relinked)
+	}
+}
+
 func TestStatus(t *testing.T) {
 	ops, p := setupOps(t)
 	profile := p.ProfilePath("work")

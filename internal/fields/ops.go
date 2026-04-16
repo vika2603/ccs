@@ -111,6 +111,67 @@ func (o Ops) Share(profile, field string, out io.Writer, in io.Reader) error {
 	return link.EnsureSymlink(sharedPath, linkPath)
 }
 
+func (o Ops) Relink(profile, field string) error {
+	if _, ok := o.registry.lookupShared(field); !ok {
+		return fmt.Errorf("field %q is not configured as shared", field)
+	}
+	profileDir := o.paths.ProfilePath(profile)
+	linkPath := filepath.Join(profileDir, field)
+	sharedPath := o.paths.SharedField(field)
+
+	info, err := os.Lstat(linkPath)
+	switch {
+	case err == nil && info.Mode()&os.ModeSymlink != 0:
+		target, rerr := os.Readlink(linkPath)
+		if rerr != nil {
+			return rerr
+		}
+		if target == sharedPath {
+			return nil
+		}
+		return fmt.Errorf("%q is a symlink to %q, not the expected shared path %q; resolve manually", linkPath, target, sharedPath)
+	case err == nil:
+		return fmt.Errorf("%q already exists as a real copy; run `ccs share %s` first to push it into shared", linkPath, field)
+	case errors.Is(err, os.ErrNotExist):
+	default:
+		return err
+	}
+
+	if _, sErr := os.Lstat(sharedPath); errors.Is(sErr, os.ErrNotExist) {
+		if err := CreateSharedTargets(o.paths.SharedDir(), []Classification{{
+			Name: field, Category: Shared, Kind: inferKind(field),
+		}}); err != nil {
+			return err
+		}
+	}
+	if err := os.MkdirAll(profileDir, 0o755); err != nil {
+		return err
+	}
+	return link.EnsureSymlink(sharedPath, linkPath)
+}
+
+func (o Ops) RelinkAll(profile string) ([]string, error) {
+	var relinked []string
+	for _, c := range o.registry.Shared() {
+		linkPath := filepath.Join(o.paths.ProfilePath(profile), c.Name)
+		info, err := os.Lstat(linkPath)
+		if err == nil && info.Mode()&os.ModeSymlink != 0 {
+			continue
+		}
+		if err == nil {
+			continue
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return relinked, err
+		}
+		if err := o.Relink(profile, c.Name); err != nil {
+			return relinked, err
+		}
+		relinked = append(relinked, c.Name)
+	}
+	return relinked, nil
+}
+
 func (o Ops) Status(profile string) (map[string]LinkState, error) {
 	profileDir := o.paths.ProfilePath(profile)
 	out := map[string]LinkState{}
