@@ -26,7 +26,8 @@ fi
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-curl -fsSL "$base/$archive" -o "$tmp/$archive"
+echo "downloading $archive" >&2
+curl -fSL --progress-bar "$base/$archive" -o "$tmp/$archive"
 curl -fsSL "$base/SHA256SUMS" -o "$tmp/SHA256SUMS"
 
 hash_line=$(grep " $archive\$" "$tmp/SHA256SUMS" || true)
