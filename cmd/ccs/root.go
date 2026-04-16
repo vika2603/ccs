@@ -10,11 +10,12 @@ var Version = "dev"
 
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:           "ccs [profile]",
-		Short:         "Claude Code profile switcher (bare `ccs` or `ccs <profile>` launches claude)",
-		SilenceUsage:  true,
-		SilenceErrors: true,
-		Args:          cobra.ArbitraryArgs,
+		Use:               "ccs [profile]",
+		Short:             "Claude Code profile switcher (bare `ccs` or `ccs <profile>` launches claude)",
+		SilenceUsage:      true,
+		SilenceErrors:     true,
+		Args:              cobra.ArbitraryArgs,
+		ValidArgsFunction: completeProfileNamesAtArg0,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
 				name, err := activeProfileName()

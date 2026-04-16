@@ -32,9 +32,10 @@ func newShellInitCmd() *cobra.Command {
 
 func newUseCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "use [name]",
-		Short: "Switch active profile",
-		Args:  cobra.MaximumNArgs(1),
+		Use:               "use [name]",
+		Short:             "Switch active profile",
+		Args:              cobra.MaximumNArgs(1),
+		ValidArgsFunction: completeProfileNamesAtArg0,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_, p, err := manager()
 			if err != nil {

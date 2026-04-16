@@ -58,6 +58,7 @@ func newRunCmd() *cobra.Command {
 		Short:              "Run a command with CLAUDE_CONFIG_DIR set (default profile: active, default cmd: claude)",
 		DisableFlagParsing: false,
 		Args:               cobra.ArbitraryArgs,
+		ValidArgsFunction:  completeProfileNamesAtArg0,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var name string
 			var rest []string

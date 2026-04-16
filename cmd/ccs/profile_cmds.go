@@ -98,9 +98,10 @@ func newLsCmd() *cobra.Command {
 
 func newPathCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "path [name]",
-		Short: "Print a profile's absolute path (default: active)",
-		Args:  cobra.MaximumNArgs(1),
+		Use:               "path [name]",
+		Short:             "Print a profile's absolute path (default: active)",
+		Args:              cobra.MaximumNArgs(1),
+		ValidArgsFunction: completeProfileNamesAtArg0,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			m, p, err := manager()
 			if err != nil {
@@ -129,9 +130,10 @@ func newRmCmd() *cobra.Command {
 	var yes bool
 	var force bool
 	cmd := &cobra.Command{
-		Use:   "rm <name>",
-		Short: "Remove a profile",
-		Args:  cobra.ExactArgs(1),
+		Use:               "rm <name>",
+		Short:             "Remove a profile",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeProfileNamesAtArg0,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			m, p, err := manager()
@@ -166,9 +168,10 @@ func newRmCmd() *cobra.Command {
 
 func newMvCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "mv <old> <new>",
-		Short: "Rename a profile",
-		Args:  cobra.ExactArgs(2),
+		Use:               "mv <old> <new>",
+		Short:             "Rename a profile",
+		Args:              cobra.ExactArgs(2),
+		ValidArgsFunction: completeProfileNamesAtArg0,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			m, p, err := manager()
 			if err != nil {

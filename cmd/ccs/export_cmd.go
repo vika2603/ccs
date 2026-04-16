@@ -22,9 +22,10 @@ func newExportCmd() *cobra.Command {
 	var outFile string
 	var full, withCreds, interactive bool
 	cmd := &cobra.Command{
-		Use:   "export <name>",
-		Short: "Export a profile to a tar.gz",
-		Args:  cobra.ExactArgs(1),
+		Use:               "export <name>",
+		Short:             "Export a profile to a tar.gz",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeProfileNamesAtArg0,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			p, err := layout.FromEnv()

@@ -47,9 +47,10 @@ func opsForActive(name string) (fields.Ops, string, error) {
 
 func newForkCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "fork <field> [<profile>]",
-		Short: "Break a shared symlink by copying shared/<field> into the profile",
-		Args:  cobra.RangeArgs(1, 2),
+		Use:               "fork <field> [<profile>]",
+		Short:             "Break a shared symlink by copying shared/<field> into the profile",
+		Args:              cobra.RangeArgs(1, 2),
+		ValidArgsFunction: completeFieldThenProfile,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			field := args[0]
 			var name string
@@ -71,9 +72,10 @@ func newForkCmd() *cobra.Command {
 
 func newShareCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "share <field> [<profile>]",
-		Short: "Push a forked field back into shared/ and relink the profile",
-		Args:  cobra.RangeArgs(1, 2),
+		Use:               "share <field> [<profile>]",
+		Short:             "Push a forked field back into shared/ and relink the profile",
+		Args:              cobra.RangeArgs(1, 2),
+		ValidArgsFunction: completeFieldThenProfile,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			field := args[0]
 			var name string
@@ -95,9 +97,10 @@ func newShareCmd() *cobra.Command {
 
 func newStatusCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "status [<profile>]",
-		Short: "Report per-field link state and summarize shared/",
-		Args:  cobra.RangeArgs(0, 1),
+		Use:               "status [<profile>]",
+		Short:             "Report per-field link state and summarize shared/",
+		Args:              cobra.RangeArgs(0, 1),
+		ValidArgsFunction: completeProfileNamesAtArg0,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var name string
 			if len(args) == 1 {
