@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/vika2603/ccs/internal/profileenv"
 	"github.com/vika2603/ccs/internal/shell"
 	"github.com/vika2603/ccs/internal/state"
 )
@@ -67,33 +68,90 @@ func newInternalShellUseCmd() *cobra.Command {
 				if err := state.Clear(p.ActiveFile()); err != nil {
 					return err
 				}
-				cmd.Println("unset CLAUDE_CONFIG_DIR CCS_MANAGED_CCD")
+				fmt.Fprint(cmd.OutOrStdout(), profileenv.RenderClearAll())
 				return nil
 			}
-			path, err := m.Path(args[0])
+			name := args[0]
+			path, err := m.Path(name)
 			if err != nil {
 				return err
 			}
-			if err := state.Write(p.ActiveFile(), args[0]); err != nil {
+			envFile := p.EnvFile(name)
+			penv, err := profileenv.Load(envFile)
+			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "export CLAUDE_CONFIG_DIR=%s; export CCS_MANAGED_CCD=1\n", shellQuote(path))
+			if err := state.Write(p.ActiveFile(), name); err != nil {
+				return err
+			}
+			out := profileenv.Render(profileenv.Action{
+				Set:       penv.Env,
+				ConfigDir: path,
+				Sig:       profileenv.Signature(name, envFile),
+			})
+			fmt.Fprint(cmd.OutOrStdout(), out)
 			return nil
 		},
 	}
 }
 
-func shellQuote(s string) string {
-	if s == "" {
-		return "''"
+// newInternalShellHookCmd implements the `ccs __shell_hook` command called by
+// the prompt hook (see internal/shell.zshSnippet). It prints shell code that,
+// when eval'd, brings the shell's env in line with the active profile. If the
+// shell is already in sync (CCS_ENV_SIG matches), it prints nothing.
+func newInternalShellHookCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:    "__shell_hook",
+		Hidden: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			m, p, err := manager()
+			if err != nil {
+				// Hook runs on every prompt; don't surface errors to the user.
+				return nil
+			}
+			active, _ := state.Read(p.ActiveFile())
+			// If state points at a missing profile directory, treat as no active.
+			var profilePath string
+			if active != "" {
+				dir, perr := m.Path(active)
+				if perr != nil {
+					active = ""
+				} else {
+					profilePath = dir
+				}
+			}
+
+			haveCCD := os.Getenv("CLAUDE_CONFIG_DIR")
+			haveManagedCCD := os.Getenv("CCS_MANAGED_CCD")
+			// User owns CLAUDE_CONFIG_DIR. Treat as "opted out" and skip env sync
+			// too - syncing envs while ignoring the user's CCD choice would be a
+			// half-sync that surprises more than it helps.
+			if haveCCD != "" && haveManagedCCD == "" {
+				return nil
+			}
+
+			envFile := p.EnvFile(active)
+			wantSig := profileenv.Signature(active, envFile)
+			if os.Getenv("CCS_ENV_SIG") == wantSig {
+				return nil
+			}
+
+			if active == "" {
+				fmt.Fprint(cmd.OutOrStdout(), profileenv.RenderClearManaged())
+				return nil
+			}
+
+			penv, err := profileenv.Load(envFile)
+			if err != nil {
+				return nil
+			}
+			out := profileenv.Render(profileenv.Action{
+				Set:       penv.Env,
+				ConfigDir: profilePath,
+				Sig:       wantSig,
+			})
+			fmt.Fprint(cmd.OutOrStdout(), out)
+			return nil
+		},
 	}
-	out := "'"
-	for _, c := range s {
-		if c == '\'' {
-			out += `'\''`
-		} else {
-			out += string(c)
-		}
-	}
-	return out + "'"
 }

@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/vika2603/ccs/internal/config"
+	"github.com/vika2603/ccs/internal/profileenv"
 	"github.com/vika2603/ccs/internal/runx"
 	"github.com/vika2603/ccs/internal/state"
 )
@@ -36,7 +37,11 @@ func runClaudeForProfile(name string, rest []string) error {
 	if err != nil {
 		return err
 	}
-	env := runx.BuildEnv(os.Environ(), path)
+	penv, err := profileenv.Load(p.EnvFile(name))
+	if err != nil {
+		return err
+	}
+	env := runx.BuildEnv(os.Environ(), path, penv.Env)
 	return syscall.Exec(bin, rest, env)
 }
 

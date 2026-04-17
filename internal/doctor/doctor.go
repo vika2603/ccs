@@ -19,6 +19,7 @@ const (
 	UnclassifiedEntry
 	OrphanKeychainEntry
 	ClassificationDrift
+	OrphanEnvFile
 )
 
 func (k Kind) String() string {
@@ -33,6 +34,8 @@ func (k Kind) String() string {
 		return "orphan-keychain-entry"
 	case ClassificationDrift:
 		return "classification-drift"
+	case OrphanEnvFile:
+		return "orphan-env-file"
 	default:
 		return "unknown"
 	}
@@ -113,7 +116,41 @@ func (c Checker) Check() ([]Finding, error) {
 	}
 	out = append(out, c.classificationDrift()...)
 	out = append(out, c.keychainOrphans(profiles)...)
+	out = append(out, c.envOrphans(profiles)...)
 	return out, nil
+}
+
+func (c Checker) envOrphans(profiles []os.DirEntry) []Finding {
+	entries, err := os.ReadDir(c.paths.EnvDir())
+	if err != nil {
+		return nil
+	}
+	have := map[string]bool{}
+	for _, pe := range profiles {
+		if pe.IsDir() {
+			have[pe.Name()] = true
+		}
+	}
+	var out []Finding
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(name, ".toml") {
+			continue
+		}
+		profile := strings.TrimSuffix(name, ".toml")
+		if have[profile] {
+			continue
+		}
+		out = append(out, Finding{
+			Kind:   OrphanEnvFile,
+			Detail: profile,
+			Path:   filepath.Join(c.paths.EnvDir(), name),
+		})
+	}
+	return out
 }
 
 func (c Checker) classificationDrift() []Finding {

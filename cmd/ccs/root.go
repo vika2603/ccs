@@ -38,12 +38,13 @@ func newRootCmd() *cobra.Command {
 	root.SetErr(os.Stderr)
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(newInitCmd(), newNewCmd(), newLsCmd(), newPathCmd(), newRmCmd(), newMvCmd())
-	root.AddCommand(newShellInitCmd(), newUseCmd(), newInternalShellUseCmd())
+	root.AddCommand(newShellInitCmd(), newUseCmd(), newInternalShellUseCmd(), newInternalShellHookCmd())
 	root.AddCommand(newRunCmd())
 	root.AddCommand(newForkCmd(), newShareCmd(), newRelinkCmd(), newClassifyCmd(), newStatusCmd())
 	root.AddCommand(newImportCmd())
 	root.AddCommand(newExportCmd())
 	root.AddCommand(newRestoreCmd())
 	root.AddCommand(newDoctorCmd(), newKeychainCmd())
+	root.AddCommand(newEnvCmd())
 	return root
 }

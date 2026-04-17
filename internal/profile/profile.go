@@ -38,6 +38,9 @@ func (m Manager) Remove(name string) error {
 			fmt.Fprintf(os.Stderr, "warning: could not delete keychain entry: %v\n", err)
 		}
 	}
+	if err := os.Remove(m.paths.EnvFile(name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		fmt.Fprintf(os.Stderr, "warning: could not remove env file %s: %v\n", m.paths.EnvFile(name), err)
+	}
 	return os.RemoveAll(dir)
 }
 
@@ -46,7 +49,7 @@ func NewManager(p layout.Paths, r *fields.Registry) Manager {
 }
 
 func (m Manager) Init() error {
-	for _, d := range []string{m.paths.Root(), m.paths.StateDir(), m.paths.SharedDir(), m.paths.ProfilesDir()} {
+	for _, d := range []string{m.paths.Root(), m.paths.StateDir(), m.paths.SharedDir(), m.paths.ProfilesDir(), m.paths.EnvDir()} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
 		}
@@ -129,7 +132,19 @@ func (m Manager) Rename(oldName, newName string) error {
 			return fmt.Errorf("migrate credentials: %w", err)
 		}
 	}
-	return os.Rename(oldDir, newDir)
+	if err := os.Rename(oldDir, newDir); err != nil {
+		return err
+	}
+	oldEnv := m.paths.EnvFile(oldName)
+	if _, err := os.Stat(oldEnv); err == nil {
+		if err := os.MkdirAll(m.paths.EnvDir(), 0o755); err != nil {
+			return err
+		}
+		if err := os.Rename(oldEnv, m.paths.EnvFile(newName)); err != nil {
+			return fmt.Errorf("rename env file: %w", err)
+		}
+	}
+	return nil
 }
 
 func (m Manager) Exists(name string) (bool, error) {

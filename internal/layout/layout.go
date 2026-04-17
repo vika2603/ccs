@@ -23,9 +23,14 @@ func (p Paths) StateDir() string    { return filepath.Join(p.Root(), "state") }
 func (p Paths) ActiveFile() string  { return filepath.Join(p.StateDir(), "active") }
 func (p Paths) SharedDir() string   { return filepath.Join(p.Root(), "shared") }
 func (p Paths) ProfilesDir() string { return filepath.Join(p.Root(), "profiles") }
+func (p Paths) EnvDir() string      { return filepath.Join(p.Root(), "env") }
 
 func (p Paths) ProfilePath(name string) string {
 	return filepath.Join(p.ProfilesDir(), name)
+}
+
+func (p Paths) EnvFile(name string) string {
+	return filepath.Join(p.EnvDir(), name+".toml")
 }
 
 func (p Paths) SharedField(field string) string {

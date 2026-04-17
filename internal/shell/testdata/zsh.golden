@@ -13,21 +13,7 @@ ccs() {
 
 _ccs_hook() {
   [ -n "$CCS_DISABLE_HOOK" ] && return
-  if [ -n "$CLAUDE_CONFIG_DIR" ] && [ -z "$CCS_MANAGED_CCD" ]; then
-    return
-  fi
-  local want
-  want="$(command ccs path 2>/dev/null || true)"
-  if [ -n "$want" ]; then
-    if [ "$CLAUDE_CONFIG_DIR" != "$want" ]; then
-      export CLAUDE_CONFIG_DIR="$want"
-      export CCS_MANAGED_CCD=1
-    fi
-  else
-    if [ -n "$CCS_MANAGED_CCD" ]; then
-      unset CLAUDE_CONFIG_DIR CCS_MANAGED_CCD
-    fi
-  fi
+  eval "$(command ccs __shell_hook 2>/dev/null)"
 }
 
 typeset -ga precmd_functions
