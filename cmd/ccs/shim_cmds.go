@@ -84,6 +84,13 @@ func shellQuote(s string) string {
 // target command with profile env injected (via runClaudeForProfile) or
 // without (via runClaudePassthrough) if nothing is active.
 //
+// If CLAUDE_CONFIG_DIR is already set in env, the shim passes through
+// without consulting state/active. This matches the shell hook's rule of
+// never overwriting a CCD the caller already set, and fixes the case where
+// `ccs run <profile>` execs a wrapper like `caffeinate claude` — the wrapper
+// resolves `claude` via PATH back to this shim, which would otherwise reset
+// CCD from state/active and undo what `ccs run` just configured.
+//
 // DisableFlagParsing is true because args after the target (e.g. --help,
 // --version) belong to the target command, not to ccs.
 func newInternalShimExecCmd() *cobra.Command {
@@ -93,6 +100,9 @@ func newInternalShimExecCmd() *cobra.Command {
 		DisableFlagParsing: true,
 		Args:               cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if os.Getenv("CLAUDE_CONFIG_DIR") != "" {
+				return runClaudePassthrough(args)
+			}
 			_, p, err := manager()
 			if err != nil {
 				return err

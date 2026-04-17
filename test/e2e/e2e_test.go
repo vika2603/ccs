@@ -30,6 +30,14 @@ func run(t *testing.T, ccs, home string, args ...string) string {
 	return string(out)
 }
 
+func runEnv(t *testing.T, ccs, home string, extraEnv []string, args ...string) (string, error) {
+	t.Helper()
+	cmd := exec.Command(ccs, args...)
+	cmd.Env = append(append(os.Environ(), "HOME="+home), extraEnv...)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
 func TestFullFlow(t *testing.T) {
 	bin := buildBinary(t)
 	home := t.TempDir()
@@ -66,5 +74,55 @@ func TestFullFlow(t *testing.T) {
 
 	if got := run(t, bin, home, "doctor"); !strings.Contains(got, "clean") && !strings.Contains(got, "orphan-shared-field") {
 		t.Errorf("doctor: %q", got)
+	}
+}
+
+// TestRunRoutesThroughShimPreservesProfile reproduces the bug where
+// `ccs run <profile>` execs a wrapper (e.g. `caffeinate claude`) whose
+// child resolves `claude` via PATH back through ~/.ccs/bin/claude. The
+// shim must honor the CCD the outer `ccs run` already set and not fall
+// back to state/active, which would silently swap to the wrong profile.
+func TestRunRoutesThroughShimPreservesProfile(t *testing.T) {
+	bin := buildBinary(t)
+	home := t.TempDir()
+	run(t, bin, home, "init")
+	run(t, bin, home, "new", "a")
+	run(t, bin, home, "new", "b")
+	run(t, bin, home, "use", "a") // state/active = a
+	run(t, bin, home, "install-shim")
+
+	// Fake `claude` that prints its CCD so we can observe which profile
+	// actually reached the final process.
+	fakeDir := filepath.Join(home, "fakebin")
+	if err := os.MkdirAll(fakeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fakeClaude := filepath.Join(fakeDir, "claude")
+	if err := os.WriteFile(fakeClaude, []byte("#!/bin/sh\necho CCD=$CLAUDE_CONFIG_DIR\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// PATH: ~/.ccs/bin (shim) first, then fakebin. Matches the real setup
+	// where `claude` without absolute path hits the shim, and the shim's
+	// passthrough (ResolveSkipping ~/.ccs/bin) then finds fake claude.
+	shimDir := filepath.Join(home, ".ccs", "bin")
+	extraEnv := []string{"PATH=" + shimDir + ":" + fakeDir + ":/usr/bin:/bin"}
+
+	// `sh -c claude` simulates a launch wrapper like `caffeinate claude`:
+	// ccs run b execs sh with CCD=b; sh resolves `claude` via PATH (ccs
+	// can't skip BinDir for a child process) -> hits the shim ->
+	// __shim_exec must honor the already-set CCD=b rather than fall back
+	// to state/active=a.
+	out, err := runEnv(t, bin, home, extraEnv, "run", "b", "--", "sh", "-c", "claude")
+	if err != nil {
+		t.Fatalf("run b: %v\n%s", err, out)
+	}
+	wantCCD := filepath.Join(home, ".ccs", "profiles", "b")
+	if !strings.Contains(out, "CCD="+wantCCD) {
+		t.Errorf("expected CCD=%s, got: %q", wantCCD, out)
+	}
+	gotCCDa := filepath.Join(home, ".ccs", "profiles", "a")
+	if strings.Contains(out, "CCD="+gotCCDa) {
+		t.Errorf("shim clobbered CCD back to active profile a: %q", out)
 	}
 }
