@@ -154,3 +154,172 @@ func TestImportExistingDir(t *testing.T) {
 		t.Errorf("shared CLAUDE.md content missing: %v / %q", err, b)
 	}
 }
+
+func TestImportStandardLayoutPicksUpHomeClaudeJSON(t *testing.T) {
+	home := t.TempDir()
+	src := filepath.Join(home, ".claude")
+	os.MkdirAll(filepath.Join(src, "skills"), 0o755)
+	os.WriteFile(filepath.Join(src, "CLAUDE.md"), []byte("memory"), 0o644)
+
+	siblingBytes := []byte(`{"oauthAccount":{"email":"x@example.com"},"userID":"u1"}`)
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), siblingBytes, 0o600); err != nil {
+		t.Fatalf("write sibling: %v", err)
+	}
+
+	runCmd(t, home, "init")
+	out, err := runCmd(t, home, "import", src, "main")
+	if err != nil {
+		t.Fatalf("import: %v\noutput: %s", err, out)
+	}
+
+	got, err := os.ReadFile(filepath.Join(home, ".ccs", "profiles", "main", ".claude.json"))
+	if err != nil {
+		t.Fatalf("read imported .claude.json: %v", err)
+	}
+	if string(got) != string(siblingBytes) {
+		t.Errorf(".claude.json bytes mismatch:\n got=%q\nwant=%q", got, siblingBytes)
+	}
+
+	if _, err := os.Stat(filepath.Join(home, ".claude.json")); err != nil {
+		t.Errorf("sibling $HOME/.claude.json should be preserved, got: %v", err)
+	}
+}
+
+func TestMaybeImportClaudeJSONCopiesOnEmptyInput(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	src := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dst := t.TempDir()
+	want := []byte(`{"oauthAccount":{"email":"x@example.com"}}`)
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), want, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	in := strings.NewReader("\n")
+	var out, errOut bytes.Buffer
+	if err := maybeImportClaudeJSON(src, dst, "main", in, &out, &errOut); err != nil {
+		t.Fatalf("maybeImportClaudeJSON: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(dst, ".claude.json"))
+	if err != nil {
+		t.Fatalf("read dst: %v", err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("bytes mismatch: got=%q want=%q", got, want)
+	}
+	info, err := os.Stat(filepath.Join(dst, ".claude.json"))
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Errorf("expected mode 0o600, got %v (err=%v)", info.Mode().Perm(), err)
+	}
+	if !strings.Contains(out.String(), "found .claude.json sibling") {
+		t.Errorf("expected prompt, got %q", out.String())
+	}
+}
+
+func TestMaybeImportClaudeJSONSkipsOnNo(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	src := filepath.Join(home, ".claude")
+	os.MkdirAll(src, 0o755)
+	dst := t.TempDir()
+	os.WriteFile(filepath.Join(home, ".claude.json"), []byte("{}"), 0o600)
+
+	in := strings.NewReader("n\n")
+	var out, errOut bytes.Buffer
+	if err := maybeImportClaudeJSON(src, dst, "main", in, &out, &errOut); err != nil {
+		t.Fatalf("maybeImportClaudeJSON: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, ".claude.json")); !os.IsNotExist(err) {
+		t.Errorf("expected dst untouched on no, stat err=%v", err)
+	}
+	if !strings.Contains(out.String(), "skipped .claude.json") {
+		t.Errorf("expected skip message, got %q", out.String())
+	}
+}
+
+func TestMaybeImportClaudeJSONSkipsWhenInDirJSONExists(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	src := filepath.Join(home, ".claude")
+	os.MkdirAll(src, 0o755)
+	os.WriteFile(filepath.Join(src, ".claude.json"), []byte(`{"in":"dir"}`), 0o600)
+	os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"sibling":true}`), 0o600)
+	dst := t.TempDir()
+
+	in := strings.NewReader("")
+	var out, errOut bytes.Buffer
+	if err := maybeImportClaudeJSON(src, dst, "main", in, &out, &errOut); err != nil {
+		t.Fatalf("maybeImportClaudeJSON: %v", err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("expected no prompt when in-dir .claude.json exists, got %q", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(dst, ".claude.json")); !os.IsNotExist(err) {
+		t.Errorf("helper must not write dst when in-dir json exists; stat err=%v", err)
+	}
+}
+
+func TestMaybeImportClaudeJSONSilentWhenSrcNotHomeClaude(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	os.WriteFile(filepath.Join(home, ".claude.json"), []byte("{}"), 0o600)
+	src := t.TempDir()
+	dst := t.TempDir()
+
+	in := strings.NewReader("")
+	var out, errOut bytes.Buffer
+	if err := maybeImportClaudeJSON(src, dst, "main", in, &out, &errOut); err != nil {
+		t.Fatalf("maybeImportClaudeJSON: %v", err)
+	}
+	if out.Len() != 0 || errOut.Len() != 0 {
+		t.Errorf("expected silent for non-$HOME/.claude src, got out=%q err=%q", out.String(), errOut.String())
+	}
+	if _, err := os.Stat(filepath.Join(dst, ".claude.json")); !os.IsNotExist(err) {
+		t.Errorf("must not import when src is not $HOME/.claude; stat err=%v", err)
+	}
+}
+
+func TestMaybeImportClaudeJSONSilentWhenSiblingMissing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	src := filepath.Join(home, ".claude")
+	os.MkdirAll(src, 0o755)
+	dst := t.TempDir()
+
+	in := strings.NewReader("")
+	var out, errOut bytes.Buffer
+	if err := maybeImportClaudeJSON(src, dst, "main", in, &out, &errOut); err != nil {
+		t.Fatalf("maybeImportClaudeJSON: %v", err)
+	}
+	if out.Len() != 0 || errOut.Len() != 0 {
+		t.Errorf("expected silent when sibling missing, got out=%q err=%q", out.String(), errOut.String())
+	}
+}
+
+func TestMaybeImportClaudeJSONDoesNotDeleteSibling(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	src := filepath.Join(home, ".claude")
+	os.MkdirAll(src, 0o755)
+	dst := t.TempDir()
+	siblingBytes := []byte(`{"keep":"me"}`)
+	siblingPath := filepath.Join(home, ".claude.json")
+	os.WriteFile(siblingPath, siblingBytes, 0o600)
+
+	in := strings.NewReader("y\n")
+	var out, errOut bytes.Buffer
+	if err := maybeImportClaudeJSON(src, dst, "main", in, &out, &errOut); err != nil {
+		t.Fatalf("maybeImportClaudeJSON: %v", err)
+	}
+	got, err := os.ReadFile(siblingPath)
+	if err != nil {
+		t.Fatalf("sibling must remain readable, got err=%v", err)
+	}
+	if string(got) != string(siblingBytes) {
+		t.Errorf("sibling bytes changed: got=%q want=%q", got, siblingBytes)
+	}
+}

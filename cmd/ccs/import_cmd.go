@@ -62,11 +62,67 @@ func newImportCmd() *cobra.Command {
 			if err := fields.ImportEntries(src, dst, p.SharedDir(), reg, prompter, move); err != nil {
 				return err
 			}
+			if err := maybeImportClaudeJSON(src, dst, name, in, cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
+				return err
+			}
 			return maybeImportCreds(src, dst, name, move, creds.New(), in, cmd.OutOrStdout(), cmd.ErrOrStderr())
 		},
 	}
 	cmd.Flags().BoolVar(&move, "move", false, "move files instead of copying")
 	return cmd
+}
+
+// maybeImportClaudeJSON handles the legacy default Claude Code layout where
+// .claude.json lives at $HOME/.claude.json (sibling of ~/.claude/), not inside
+// the directory. With CLAUDE_CONFIG_DIR set, the file lives inside the config
+// dir and is picked up by ImportEntries as a normal Isolated entry; in that
+// case this helper is a no-op.
+func maybeImportClaudeJSON(src, dst, name string, in io.Reader, out, errOut io.Writer) error {
+	absSrc, err := filepath.Abs(src)
+	if err != nil {
+		return nil
+	}
+	if _, err := os.Stat(filepath.Join(absSrc, ".claude.json")); err == nil {
+		return nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	if absSrc != filepath.Join(home, ".claude") {
+		return nil
+	}
+	siblingPath := filepath.Join(home, ".claude.json")
+	data, err := os.ReadFile(siblingPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		fmt.Fprintf(errOut, "warning: could not read %s: %v\n", siblingPath, err)
+		return nil
+	}
+	br, ok := in.(*bufio.Reader)
+	if !ok {
+		br = bufio.NewReader(in)
+	}
+	fmt.Fprintf(out, "found .claude.json sibling at %s; import to profile %q? (Y/n) ", siblingPath, name)
+	line, _ := br.ReadString('\n')
+	ans := strings.ToLower(strings.TrimSpace(line))
+	if ans == "n" || ans == "no" {
+		fmt.Fprintln(out, "skipped .claude.json")
+		return nil
+	}
+	absDst, err := filepath.Abs(dst)
+	if err != nil {
+		return nil
+	}
+	dstPath := filepath.Join(absDst, ".claude.json")
+	if err := os.WriteFile(dstPath, data, 0o600); err != nil {
+		fmt.Fprintf(errOut, "warning: could not write .claude.json: %v\n", err)
+		return nil
+	}
+	fmt.Fprintf(out, "imported %s -> %s (sibling preserved)\n", siblingPath, dstPath)
+	return nil
 }
 
 func maybeImportCreds(src, dst, name string, move bool, store creds.Store, in io.Reader, out, errOut io.Writer) error {
