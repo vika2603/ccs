@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/vika2603/ccs/internal/config"
+	"github.com/vika2603/ccs/internal/layout"
 	"github.com/vika2603/ccs/internal/profileenv"
 	"github.com/vika2603/ccs/internal/runx"
 	"github.com/vika2603/ccs/internal/state"
@@ -22,18 +23,8 @@ func runClaudeForProfile(name string, rest []string) error {
 	if err != nil {
 		return err
 	}
-	if len(rest) == 0 {
-		cfg, err := config.Load(p.ConfigFile())
-		if err != nil {
-			return err
-		}
-		if len(cfg.Launch.Command) > 0 {
-			rest = append([]string{}, cfg.Launch.Command...)
-		} else {
-			rest = []string{"claude"}
-		}
-	}
-	bin, err := runx.Resolve(rest)
+	rest = defaultCommand(p, rest)
+	bin, err := runx.ResolveSkipping(rest, []string{p.BinDir()})
 	if err != nil {
 		return err
 	}
@@ -43,6 +34,33 @@ func runClaudeForProfile(name string, rest []string) error {
 	}
 	env := runx.BuildEnv(os.Environ(), path, penv.Env)
 	return syscall.Exec(bin, rest, env)
+}
+
+// runClaudePassthrough execs the target command with the parent's env unchanged.
+// Used when no profile is active - the shim still needs to launch claude even
+// without per-profile env injection.
+func runClaudePassthrough(rest []string) error {
+	_, p, err := manager()
+	if err != nil {
+		return err
+	}
+	rest = defaultCommand(p, rest)
+	bin, err := runx.ResolveSkipping(rest, []string{p.BinDir()})
+	if err != nil {
+		return err
+	}
+	return syscall.Exec(bin, rest, os.Environ())
+}
+
+func defaultCommand(p layout.Paths, rest []string) []string {
+	if len(rest) > 0 {
+		return rest
+	}
+	cfg, err := config.Load(p.ConfigFile())
+	if err == nil && len(cfg.Launch.Command) > 0 {
+		return append([]string{}, cfg.Launch.Command...)
+	}
+	return []string{"claude"}
 }
 
 func activeProfileName() (string, error) {
@@ -68,17 +86,23 @@ func newRunCmd() *cobra.Command {
 			var name string
 			var rest []string
 			if len(args) == 0 {
-				n, err := activeProfileName()
+				// No explicit profile: use active if any, otherwise pass
+				// through without env injection. This lets the PATH shim
+				// (~/.ccs/bin/claude) call `ccs run -- claude` unconditionally.
+				_, p, err := manager()
 				if err != nil {
 					return err
 				}
-				name = n
+				name, _ = state.Read(p.ActiveFile())
 			} else {
 				name = args[0]
 				rest = args[1:]
 				if len(rest) > 0 && rest[0] == "--" {
 					rest = rest[1:]
 				}
+			}
+			if name == "" {
+				return runClaudePassthrough(rest)
 			}
 			return runClaudeForProfile(name, rest)
 		},

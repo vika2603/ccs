@@ -22,6 +22,7 @@ func TestUseEmitsStateChange(t *testing.T) {
 	home := t.TempDir()
 	runCmd(t, home, "init")
 	runCmd(t, home, "new", "work")
+	runCmd(t, home, "env", "set", "work", "ANTHROPIC_API_KEY=sk-secret")
 	out, err := runCmd(t, home, "__shell_use", "work")
 	if err != nil {
 		t.Fatalf("use: %v", err)
@@ -32,15 +33,19 @@ func TestUseEmitsStateChange(t *testing.T) {
 	if !strings.Contains(out, "export CCS_MANAGED_CCD=1") {
 		t.Errorf("missing sentinel: %q", out)
 	}
-	if !strings.Contains(out, "export CCS_MANAGED_VARS=") {
-		t.Errorf("missing CCS_MANAGED_VARS: %q", out)
-	}
 	if !strings.Contains(out, "export CCS_ENV_SIG=") {
 		t.Errorf("missing CCS_ENV_SIG: %q", out)
 	}
 	wantPath := filepath.Join(home, ".ccs", "profiles", "work")
 	if !strings.Contains(out, wantPath) {
 		t.Errorf("path not present: %q", out)
+	}
+	// Profile env vars must not reach the shell.
+	if strings.Contains(out, "ANTHROPIC_API_KEY") || strings.Contains(out, "sk-secret") {
+		t.Errorf("profile env leaked into shell eval: %q", out)
+	}
+	if strings.Contains(out, "export CCS_MANAGED_VARS=") {
+		t.Errorf("CCS_MANAGED_VARS no longer expected in output: %q", out)
 	}
 }
 

@@ -24,6 +24,11 @@ func (p Paths) ActiveFile() string  { return filepath.Join(p.StateDir(), "active
 func (p Paths) SharedDir() string   { return filepath.Join(p.Root(), "shared") }
 func (p Paths) ProfilesDir() string { return filepath.Join(p.Root(), "profiles") }
 func (p Paths) EnvDir() string      { return filepath.Join(p.Root(), "env") }
+func (p Paths) BinDir() string      { return filepath.Join(p.Root(), "bin") }
+
+func (p Paths) ShimPath(name string) string {
+	return filepath.Join(p.BinDir(), name)
+}
 
 func (p Paths) ProfilePath(name string) string {
 	return filepath.Join(p.ProfilesDir(), name)

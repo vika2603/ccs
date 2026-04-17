@@ -17,6 +17,20 @@ Add to `~/.zshrc` or `~/.bashrc`:
 eval "$(ccs shell-init)"
 ```
 
+Install the `claude` shim so per-profile env vars reach the `claude`
+process without leaking into your daily shell:
+
+```sh
+ccs install-shim
+```
+
+Add `~/.ccs/bin` to `PATH` in `~/.zprofile` (not just `~/.zshrc`, so GUI
+apps like VS Code and JetBrains see it too):
+
+```sh
+export PATH="$HOME/.ccs/bin:$PATH"
+```
+
 ## Usage
 
 ```sh
@@ -26,5 +40,9 @@ ccs new work                 # a fresh empty profile
 ccs use work                 # switch this shell to "work"
 claude                       # runs against the "work" profile
 ```
+
+Per-profile env vars (set via `ccs env set <profile> KEY=VAL`) are injected
+only into the `claude` process when the shim runs it. They do **not** appear
+in `env` / `printenv` in your regular shell.
 
 `ccs --help` lists everything else.

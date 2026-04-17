@@ -2,20 +2,23 @@ package profileenv
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 )
 
 // Action describes one shell-eval block to emit.
 //
+// Profile env vars (Set) are no longer exported into the user's shell - they
+// only reach the claude process via the PATH shim (~/.ccs/bin/claude) which
+// routes through `ccs run`. The Set field stays on the struct because callers
+// still hand it in, but Render ignores it.
+//
 // The produced block:
-//  1. Unsets every env var named in $CCS_MANAGED_VARS (the previous managed set).
-//     New exports below then re-add whatever should stay. The net effect is that
-//     vars present in the old profile but not in the new one disappear, while
-//     vars the user exported by hand (not in CCS_MANAGED_VARS) are untouched.
-//  2. Exports each Set entry.
-//  3. Updates CCS_MANAGED_VARS to the new name list and, if Sig != "", CCS_ENV_SIG.
-//  4. Exports CLAUDE_CONFIG_DIR + CCS_MANAGED_CCD when ConfigDir != "".
+//  1. Unsets every env var named in $CCS_MANAGED_VARS. This is migration-only
+//     cleanup for shells that still carry vars exported by older ccs versions;
+//     new profile activations don't add anything to CCS_MANAGED_VARS.
+//  2. If Sig != "", exports CCS_ENV_SIG so the prompt hook can fast-path when
+//     nothing has changed.
+//  3. Exports CLAUDE_CONFIG_DIR + CCS_MANAGED_CCD when ConfigDir != "".
 type Action struct {
 	Set       map[string]string
 	ConfigDir string
@@ -27,11 +30,6 @@ func Render(a Action) string {
 	var b strings.Builder
 	writeUnsetManagedLoop(&b)
 
-	keys := sortedKeys(a.Set)
-	for _, k := range keys {
-		fmt.Fprintf(&b, "export %s=%s\n", k, ShellQuote(a.Set[k]))
-	}
-	fmt.Fprintf(&b, "export CCS_MANAGED_VARS=%s\n", ShellQuote(strings.Join(keys, " ")))
 	if a.Sig != "" {
 		fmt.Fprintf(&b, "export CCS_ENV_SIG=%s\n", ShellQuote(a.Sig))
 	}
@@ -71,15 +69,6 @@ func RenderClearManaged() string {
 // does not word-split bare $foo by default).
 func writeUnsetManagedLoop(b *strings.Builder) {
 	b.WriteString("if [ -n \"${CCS_MANAGED_VARS-}\" ]; then eval \"for _v in $CCS_MANAGED_VARS; do unset \\\"\\$_v\\\"; done\"; unset _v; fi\n")
-}
-
-func sortedKeys(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }
 
 // ShellQuote wraps s in single quotes with proper escaping so that `eval` in

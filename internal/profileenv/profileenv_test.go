@@ -135,7 +135,7 @@ func TestSignatureEmptyProfile(t *testing.T) {
 	}
 }
 
-func TestRenderContainsSetUnsetAndSig(t *testing.T) {
+func TestRenderContainsCCDAndSig(t *testing.T) {
 	out := Render(Action{
 		Set:       map[string]string{"FOO": "bar", "BAZ": "qux"},
 		ConfigDir: "/tmp/p",
@@ -143,9 +143,6 @@ func TestRenderContainsSetUnsetAndSig(t *testing.T) {
 	})
 	for _, want := range []string{
 		"if [ -n \"${CCS_MANAGED_VARS-}\" ]",
-		"export BAZ='qux'",
-		"export FOO='bar'",
-		"export CCS_MANAGED_VARS='BAZ FOO'",
 		"export CCS_ENV_SIG='work:123'",
 		"export CLAUDE_CONFIG_DIR='/tmp/p'",
 		"export CCS_MANAGED_CCD=1",
@@ -156,14 +153,24 @@ func TestRenderContainsSetUnsetAndSig(t *testing.T) {
 	}
 }
 
-func TestRenderEscapesSpecialChars(t *testing.T) {
+// Profile env vars must not reach the shell. They're injected into the claude
+// process via the ~/.ccs/bin/claude shim instead.
+func TestRenderDoesNotExportProfileEnv(t *testing.T) {
 	out := Render(Action{
-		Set: map[string]string{"X": "a'b$c`d\\e\nf"},
-		Sig: "s",
+		Set:       map[string]string{"FOO": "bar", "ANTHROPIC_API_KEY": "sk-secret"},
+		ConfigDir: "/tmp/p",
+		Sig:       "s",
 	})
-	// Value should appear as a single-quoted string with '\'' for the apostrophe.
-	if !strings.Contains(out, "export X='a'\\''b$c`d\\e\nf'") {
-		t.Errorf("expected properly escaped value in: %s", out)
+	for _, unwanted := range []string{
+		"export FOO=",
+		"export ANTHROPIC_API_KEY=",
+		"export CCS_MANAGED_VARS=",
+		"sk-secret",
+		"'bar'",
+	} {
+		if strings.Contains(out, unwanted) {
+			t.Errorf("render unexpectedly contains %q\n---\n%s", unwanted, out)
+		}
 	}
 }
 
