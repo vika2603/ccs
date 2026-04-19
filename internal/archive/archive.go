@@ -219,6 +219,13 @@ func Unpack(tarPath, destDir string) (Manifest, error) {
 				}
 				manifestSeen = true
 			}
+		case tar.TypeSymlink:
+			if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+				return Manifest{}, err
+			}
+			if err := os.Symlink(h.Linkname, out); err != nil {
+				return Manifest{}, err
+			}
 		default:
 			return Manifest{}, fmt.Errorf("unsupported tar entry %q", h.Name)
 		}

@@ -186,6 +186,9 @@ func newExportCmd() *cobra.Command {
 }
 
 func readPassphrase(prompt string, confirm bool) (string, error) {
+	if v, ok := os.LookupEnv("CCS_PASSPHRASE"); ok {
+		return v, nil
+	}
 	fmt.Fprint(os.Stderr, prompt)
 	b, err := term.ReadPassword(int(os.Stdin.Fd()))
 	if err != nil {

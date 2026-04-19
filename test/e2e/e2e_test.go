@@ -50,7 +50,7 @@ func TestFullFlow(t *testing.T) {
 	os.MkdirAll(filepath.Join(src, "projects"), 0o755)
 	os.WriteFile(filepath.Join(src, "projects", "p.txt"), []byte("p"), 0o644)
 
-	run(t, bin, home, "import", src, "main")
+	run(t, bin, home, "adopt", src, "main")
 	run(t, bin, home, "new", "work")
 
 	run(t, bin, home, "use", "work")
@@ -65,7 +65,7 @@ func TestFullFlow(t *testing.T) {
 	run(t, bin, home, "export", "main", "-o", exportFile)
 	dst := t.TempDir()
 	run(t, bin, dst, "init")
-	run(t, bin, dst, "restore", exportFile, "--as", "main2")
+	run(t, bin, dst, "import", exportFile, "--as", "main2")
 
 	b, err := os.ReadFile(filepath.Join(dst, ".ccs", "shared", "skills", "hello", "SKILL.md"))
 	if err != nil || string(b) != "hi" {
@@ -74,6 +74,72 @@ func TestFullFlow(t *testing.T) {
 
 	if got := run(t, bin, home, "doctor"); !strings.Contains(got, "clean") && !strings.Contains(got, "orphan-shared-field") {
 		t.Errorf("doctor: %q", got)
+	}
+}
+
+func TestBackupRestore(t *testing.T) {
+	bin := buildBinary(t)
+	home := t.TempDir()
+	runEnvOrFail := func(extraEnv []string, args ...string) string {
+		t.Helper()
+		out, err := runEnv(t, bin, home, extraEnv, args...)
+		if err != nil {
+			t.Fatalf("ccs %v: %v\n%s", args, err, out)
+		}
+		return out
+	}
+
+	runEnvOrFail(nil, "init")
+	runEnvOrFail(nil, "new", "alpha")
+	runEnvOrFail(nil, "new", "beta")
+	runEnvOrFail(nil, "env", "set", "alpha", "FOO=bar")
+	runEnvOrFail(nil, "use", "alpha")
+	runEnvOrFail(nil, "fork", "CLAUDE.md", "beta")
+	if err := os.WriteFile(filepath.Join(home, ".ccs", "profiles", "beta", "CLAUDE.md"), []byte("beta-local\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".ccs", "shared", "CLAUDE.md"), []byte("shared-mem\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	backupFile := filepath.Join(t.TempDir(), "backup.tar.gz")
+	runEnvOrFail([]string{"CCS_PASSPHRASE=test"}, "backup", "-o", backupFile)
+
+	dst := t.TempDir()
+	out, err := runEnv(t, bin, dst, []string{"CCS_PASSPHRASE=test"}, "restore", backupFile)
+	if err != nil {
+		t.Fatalf("restore: %v\n%s", err, out)
+	}
+
+	for _, name := range []string{"alpha", "beta"} {
+		if _, err := os.Stat(filepath.Join(dst, ".ccs", "profiles", name)); err != nil {
+			t.Errorf("profile %s missing after restore: %v", name, err)
+		}
+	}
+	if b, err := os.ReadFile(filepath.Join(dst, ".ccs", "shared", "CLAUDE.md")); err != nil || string(b) != "shared-mem\n" {
+		t.Errorf("restored shared CLAUDE.md: %v / %q", err, b)
+	}
+	if b, err := os.ReadFile(filepath.Join(dst, ".ccs", "profiles", "beta", "CLAUDE.md")); err != nil || string(b) != "beta-local\n" {
+		t.Errorf("restored beta fork: %v / %q", err, b)
+	}
+	// alpha CLAUDE.md should be a symlink that resolves to shared.
+	alphaCLAUDE := filepath.Join(dst, ".ccs", "profiles", "alpha", "CLAUDE.md")
+	info, err := os.Lstat(alphaCLAUDE)
+	if err != nil {
+		t.Fatalf("lstat alpha CLAUDE.md: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("alpha CLAUDE.md should be a symlink after restore")
+	}
+	if b, err := os.ReadFile(alphaCLAUDE); err != nil || string(b) != "shared-mem\n" {
+		t.Errorf("follow alpha CLAUDE.md: %v / %q", err, b)
+	}
+	if b, err := os.ReadFile(filepath.Join(dst, ".ccs", "env", "alpha.toml")); err != nil || !strings.Contains(string(b), "FOO") {
+		t.Errorf("restored env alpha.toml: %v / %q", err, b)
+	}
+	// active profile should be alpha
+	if b, err := os.ReadFile(filepath.Join(dst, ".ccs", "state", "active")); err != nil || strings.TrimSpace(string(b)) != "alpha" {
+		t.Errorf("active after restore: %v / %q", err, b)
 	}
 }
 

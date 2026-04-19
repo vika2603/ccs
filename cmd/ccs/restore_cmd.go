@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,18 +15,17 @@ import (
 	"github.com/vika2603/ccs/internal/archive"
 	"github.com/vika2603/ccs/internal/creds"
 	"github.com/vika2603/ccs/internal/layout"
-	"github.com/vika2603/ccs/internal/link"
 	"github.com/vika2603/ccs/internal/state"
 )
 
 var restorePlatformOverride = runtime.GOOS
 
 func newRestoreCmd() *cobra.Command {
-	var asName string
 	var force bool
+	var noActive bool
 	cmd := &cobra.Command{
 		Use:   "restore <file>",
-		Short: "Restore a profile from a ccs export archive",
+		Short: "Restore the entire ccs directory from a backup archive",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			src := args[0]
@@ -39,60 +40,58 @@ func newRestoreCmd() *cobra.Command {
 			}
 			defer os.RemoveAll(tmp)
 
-			m, err := archive.Unpack(src, tmp)
+			m, err := archive.UnpackBackup(src, tmp)
 			if err != nil {
 				return err
+			}
+			if m.Type != archive.BackupType {
+				return fmt.Errorf("archive is not a full backup (type=%q); use `ccs import` for single-profile archives", m.Type)
 			}
 			if m.SourcePlatform != "" && m.SourcePlatform != restorePlatformOverride {
 				return fmt.Errorf("archive platform %q does not match current platform %q; cross-platform restore is not supported yet", m.SourcePlatform, restorePlatformOverride)
 			}
-			name := m.Profile
-			if asName != "" {
-				if err := state.ValidName(asName); err != nil {
-					return err
-				}
-				name = asName
-			}
-			dst := p.ProfilePath(name)
-			if _, err := os.Stat(dst); err == nil {
-				if !force {
-					return fmt.Errorf("profile %q already exists (use --force)", name)
-				}
-				if err := os.RemoveAll(dst); err != nil {
-					return err
-				}
-			} else if !errors.Is(err, os.ErrNotExist) {
+
+			if err := os.MkdirAll(p.Root(), 0o755); err != nil {
 				return err
 			}
-			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+
+			slots := []restoreSlot{}
+			if _, err := os.Stat(filepath.Join(tmp, "config.toml")); err == nil {
+				slots = append(slots, restoreSlot{filepath.Join(tmp, "config.toml"), p.ConfigFile()})
+			}
+
+			if err := collectChildrenAsSlots(filepath.Join(tmp, "shared"), p.SharedDir(), &slots); err != nil {
 				return err
 			}
-			if err := moveTree(filepath.Join(tmp, "profile"), dst); err != nil {
+			if err := collectChildrenAsSlots(filepath.Join(tmp, "profiles"), p.ProfilesDir(), &slots); err != nil {
 				return err
 			}
-			sharedSrc := filepath.Join(tmp, "shared")
-			if _, err := os.Stat(sharedSrc); err == nil {
-				entries, _ := os.ReadDir(sharedSrc)
-				for _, e := range entries {
-					target := p.SharedField(e.Name())
-					install, err := sharedSlotAvailable(target)
-					if err != nil {
-						return err
-					}
-					if install {
-						if err := os.RemoveAll(target); err != nil {
-							return err
-						}
-						if err := moveTree(filepath.Join(sharedSrc, e.Name()), target); err != nil {
-							return err
-						}
-					}
-					inProfile := filepath.Join(dst, e.Name())
-					if err := link.ReplaceCopyWithSymlink(inProfile, target); err != nil {
+			if err := collectChildrenAsSlots(filepath.Join(tmp, "env"), p.EnvDir(), &slots); err != nil {
+				return err
+			}
+
+			if !force {
+				for _, s := range slots {
+					if _, err := os.Lstat(s.dst); err == nil {
+						return fmt.Errorf("%s already exists (use --force to overwrite)", s.dst)
+					} else if !errors.Is(err, os.ErrNotExist) {
 						return err
 					}
 				}
 			}
+
+			for _, s := range slots {
+				if err := os.MkdirAll(filepath.Dir(s.dst), 0o755); err != nil {
+					return err
+				}
+				if err := os.RemoveAll(s.dst); err != nil {
+					return err
+				}
+				if err := copyPathTree(s.src, s.dst); err != nil {
+					return err
+				}
+			}
+
 			encPath := filepath.Join(tmp, "credentials.json.age")
 			if _, err := os.Stat(encPath); err == nil {
 				data, err := os.ReadFile(encPath)
@@ -107,58 +106,101 @@ func newRestoreCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				if err := creds.New().Write(dst, plain); err != nil {
-					return err
+				var bundle map[string]string
+				if err := json.Unmarshal(plain, &bundle); err != nil {
+					return fmt.Errorf("parse credentials bundle: %w", err)
+				}
+				store := creds.New()
+				for name, b64 := range bundle {
+					blob, err := base64.StdEncoding.DecodeString(b64)
+					if err != nil {
+						fmt.Fprintf(cmd.ErrOrStderr(), "warning: decode credentials for %q: %v\n", name, err)
+						continue
+					}
+					if err := store.Write(p.ProfilePath(name), blob); err != nil {
+						fmt.Fprintf(cmd.ErrOrStderr(), "warning: write credentials for %q: %v\n", name, err)
+					}
 				}
 			}
-			cmd.Printf("restored profile %q\n", name)
+
+			if !noActive && m.Active != "" {
+				if err := state.Write(p.ActiveFile(), m.Active); err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "warning: set active profile %q: %v\n", m.Active, err)
+				}
+			}
+
+			cmd.Printf("restored %d profile(s) from %s\n", len(m.Profiles), src)
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&asName, "as", "", "override profile name")
-	cmd.Flags().BoolVar(&force, "force", false, "replace existing profile")
+	cmd.Flags().BoolVar(&force, "force", false, "overwrite existing entries in ~/.ccs")
+	cmd.Flags().BoolVar(&noActive, "no-active", false, "do not restore the active profile pointer")
 	return cmd
 }
 
-func sharedSlotAvailable(target string) (bool, error) {
-	info, err := os.Lstat(target)
-	if errors.Is(err, os.ErrNotExist) {
-		return true, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	if !info.IsDir() {
-		return info.Size() == 0, nil
-	}
-	entries, err := os.ReadDir(target)
-	if err != nil {
-		return false, err
-	}
-	return len(entries) == 0, nil
+type restoreSlot struct {
+	src string
+	dst string
 }
 
-func moveTree(src, dst string) error {
-	return filepath.Walk(src, func(p string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(src, p)
-		target := filepath.Join(dst, rel)
-		if info.IsDir() {
-			return os.MkdirAll(target, info.Mode())
-		}
-		in, err := os.Open(p)
-		if err != nil {
-			return err
-		}
-		defer in.Close()
-		out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
-		if err != nil {
-			return err
-		}
-		defer out.Close()
-		_, err = io.Copy(out, in)
+// collectChildrenAsSlots lists srcDir and appends each entry as a pending
+// install into dstDir. When srcDir does not exist it is a no-op.
+func collectChildrenAsSlots(srcDir, dstDir string, out *[]restoreSlot) error {
+	entries, err := os.ReadDir(srcDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
 		return err
-	})
+	}
+	for _, e := range entries {
+		*out = append(*out, restoreSlot{
+			src: filepath.Join(srcDir, e.Name()),
+			dst: filepath.Join(dstDir, e.Name()),
+		})
+	}
+	return nil
+}
+
+// copyPathTree copies src to dst, preserving symlinks (not dereferenced) and
+// file modes. Intended for moving a freshly unpacked tree into ~/.ccs.
+func copyPathTree(src, dst string) error {
+	info, err := os.Lstat(src)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Readlink(src)
+		if err != nil {
+			return err
+		}
+		return os.Symlink(target, dst)
+	}
+	if info.IsDir() {
+		if err := os.MkdirAll(dst, info.Mode().Perm()); err != nil {
+			return err
+		}
+		entries, err := os.ReadDir(src)
+		if err != nil {
+			return err
+		}
+		for _, e := range entries {
+			if err := copyPathTree(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode().Perm())
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	return err
 }

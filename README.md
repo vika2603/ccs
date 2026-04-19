@@ -35,7 +35,7 @@ export PATH="$HOME/.ccs/bin:$PATH"
 
 ```sh
 ccs init
-ccs import ~/.claude home    # adopt the existing setup as profile "home"
+ccs adopt ~/.claude home     # adopt the existing setup as profile "home"
 ccs new work                 # a fresh empty profile
 ccs use work                 # switch this shell to "work"
 claude                       # runs against the "work" profile
