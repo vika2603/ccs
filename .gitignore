@@ -1,5 +1,6 @@
 /bin/
 /dist/
+/ccs
 *.test
 *.out
 .DS_Store
