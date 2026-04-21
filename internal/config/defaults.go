@@ -14,13 +14,14 @@ package config
 func Default() Config {
 	return Config{
 		Version: supportedVersion,
-		Shared:  []string{"skills", "commands", "agents", "plugins", "CLAUDE.md", "settings.json"},
+		Shared:  []string{"skills", "commands", "agents", "CLAUDE.md", "settings.json"},
 		Isolated: []string{
 			".claude.json",
 			".credentials.json",
 			"backups",
 			"history.jsonl",
 			"ide",
+			"plugins",
 			"mcp-needs-auth-cache.json",
 			"policy-limits.json",
 			"projects",
@@ -30,7 +31,7 @@ func Default() Config {
 			"todos",
 		},
 		Export: Export{
-			Exclude: []string{"cache", "chrome", "paste-cache", "stats-cache.json"},
+			Exclude: []string{"cache", "plugin", "chrome", "paste-cache", "stats-cache.json"},
 		},
 	}
 }
