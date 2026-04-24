@@ -60,7 +60,7 @@ func (m Manager) Init() error {
 	return nil
 }
 
-func (m Manager) New(name string) error {
+func (m Manager) New(name string, blank bool) error {
 	if err := state.ValidName(name); err != nil {
 		return err
 	}
@@ -72,6 +72,9 @@ func (m Manager) New(name string) error {
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
+	}
+	if blank {
+		return nil
 	}
 	if err := fields.CreateSharedTargets(m.paths.SharedDir(), m.fields.Shared()); err != nil {
 		return err

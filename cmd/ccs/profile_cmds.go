@@ -56,7 +56,8 @@ func newInitCmd() *cobra.Command {
 }
 
 func newNewCmd() *cobra.Command {
-	return &cobra.Command{
+	var blank bool
+	cmd := &cobra.Command{
 		Use:   "new <name>",
 		Short: "Create a new profile",
 		Args:  cobra.ExactArgs(1),
@@ -65,9 +66,11 @@ func newNewCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return m.New(args[0])
+			return m.New(args[0], blank)
 		},
 	}
+	cmd.Flags().BoolVarP(&blank, "blank", "b", false, "create a blank profile without linking shared assets")
+	return cmd
 }
 
 func newLsCmd() *cobra.Command {

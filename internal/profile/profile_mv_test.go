@@ -8,7 +8,7 @@ import (
 func TestRenameMovesDir(t *testing.T) {
 	m, p := setup(t)
 	m.Init()
-	m.New("work")
+	m.New("work", false)
 	if err := m.Rename("work", "office"); err != nil {
 		t.Fatalf("rename: %v", err)
 	}
@@ -23,8 +23,8 @@ func TestRenameMovesDir(t *testing.T) {
 func TestRenameFailsOnConflict(t *testing.T) {
 	m, _ := setup(t)
 	m.Init()
-	m.New("a")
-	m.New("b")
+	m.New("a", false)
+	m.New("b", false)
 	if err := m.Rename("a", "b"); err == nil {
 		t.Error("expected conflict error")
 	}
@@ -47,7 +47,7 @@ func (f *migrateFake) Exists(p string) (bool, error)  { return true, nil }
 func TestRenameMigratesCreds(t *testing.T) {
 	m, p := setup(t)
 	m.Init()
-	m.New("work")
+	m.New("work", false)
 	f := &migrateFake{}
 	m2 := m.WithCreds(f)
 	if err := m2.Rename("work", "office"); err != nil {

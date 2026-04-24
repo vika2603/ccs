@@ -8,7 +8,7 @@ import (
 func TestRemoveDeletesProfileDir(t *testing.T) {
 	m, p := setup(t)
 	m.Init()
-	m.New("work")
+	m.New("work", false)
 	if err := m.Remove("work"); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
@@ -43,7 +43,7 @@ func (f *fakeStore) Delete(p string) error {
 func TestRemoveAlwaysDeletesCredentials(t *testing.T) {
 	m, p := setup(t)
 	m.Init()
-	m.New("work")
+	m.New("work", false)
 	f := &fakeStore{}
 	m2 := m.WithCreds(f)
 	if err := m2.Remove("work"); err != nil {

@@ -25,7 +25,7 @@ func TestNewCreatesProfileAndSymlinks(t *testing.T) {
 	if err := m.Init(); err != nil {
 		t.Fatalf("init: %v", err)
 	}
-	if err := m.New("work"); err != nil {
+	if err := m.New("work", false); err != nil {
 		t.Fatalf("new: %v", err)
 	}
 	for _, f := range []string{"skills", "commands", "CLAUDE.md"} {
@@ -47,13 +47,34 @@ func TestNewCreatesProfileAndSymlinks(t *testing.T) {
 	}
 }
 
+func TestNewBlankSkipsSymlinks(t *testing.T) {
+	m, p := setup(t)
+	if err := m.Init(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if err := m.New("work", true); err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	entries, err := os.ReadDir(p.ProfilePath("work"))
+	if err != nil {
+		t.Fatalf("readdir: %v", err)
+	}
+	if len(entries) != 0 {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("blank profile should be empty, got %v", names)
+	}
+}
+
 func TestNewRejectsExisting(t *testing.T) {
 	m, _ := setup(t)
 	m.Init()
-	if err := m.New("work"); err != nil {
+	if err := m.New("work", false); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.New("work"); err == nil {
+	if err := m.New("work", false); err == nil {
 		t.Errorf("expected duplicate error")
 	}
 }
@@ -61,8 +82,8 @@ func TestNewRejectsExisting(t *testing.T) {
 func TestList(t *testing.T) {
 	m, _ := setup(t)
 	m.Init()
-	m.New("a")
-	m.New("b")
+	m.New("a", false)
+	m.New("b", false)
 	names, err := m.List()
 	if err != nil {
 		t.Fatalf("list: %v", err)
@@ -76,7 +97,7 @@ func TestList(t *testing.T) {
 func TestPathReturnsAbsolute(t *testing.T) {
 	m, p := setup(t)
 	m.Init()
-	m.New("work")
+	m.New("work", false)
 	got, err := m.Path("work")
 	if err != nil {
 		t.Fatalf("path: %v", err)
