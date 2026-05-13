@@ -49,12 +49,12 @@ func TestUseEmitsStateChange(t *testing.T) {
 	}
 }
 
-func TestUseEmptyUnsets(t *testing.T) {
+func TestUnuseUnsets(t *testing.T) {
 	home := t.TempDir()
 	runCmd(t, home, "init")
-	out, err := runCmd(t, home, "__shell_use")
+	out, err := runCmd(t, home, "__shell_unuse")
 	if err != nil {
-		t.Fatalf("use empty: %v", err)
+		t.Fatalf("unuse: %v", err)
 	}
 	if !strings.Contains(out, "unset CCS_MANAGED_VARS CCS_ENV_SIG CLAUDE_CONFIG_DIR CCS_MANAGED_CCD") {
 		t.Errorf("missing unset line: %q", out)

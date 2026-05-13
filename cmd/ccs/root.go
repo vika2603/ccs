@@ -10,7 +10,7 @@ var Version = "dev"
 
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:               "ccs [profile]",
+		Use:               "ccs [profile] [-- claude-args...]",
 		Short:             "Claude Code profile switcher (bare `ccs` or `ccs <profile>` launches claude)",
 		SilenceUsage:      true,
 		SilenceErrors:     true,
@@ -27,18 +27,26 @@ func newRootCmd() *cobra.Command {
 				return runClaudeForProfile(name, nil)
 			}
 			name := args[0]
-			rest := args[1:]
-			if len(rest) > 0 && rest[0] == "--" {
-				rest = rest[1:]
+			claudeArgs := args[1:]
+			if len(claudeArgs) > 0 && claudeArgs[0] == "--" {
+				claudeArgs = claudeArgs[1:]
 			}
-			return runClaudeForProfile(name, rest)
+			if len(claudeArgs) == 0 {
+				return runClaudeForProfile(name, nil)
+			}
+			_, p, err := manager()
+			if err != nil {
+				return err
+			}
+			return runClaudeForProfile(name, append(defaultCommand(p, nil), claudeArgs...))
 		},
 	}
 	root.SetOut(os.Stdout)
 	root.SetErr(os.Stderr)
+	root.Flags().SetInterspersed(false)
 	root.AddCommand(newVersionCmd())
-	root.AddCommand(newInitCmd(), newNewCmd(), newLsCmd(), newPathCmd(), newRmCmd(), newMvCmd())
-	root.AddCommand(newShellInitCmd(), newUseCmd(), newInternalShellUseCmd(), newInternalShellHookCmd())
+	root.AddCommand(newInitCmd(), newNewCmd(), newLsCmd(), newPathCmd(), newRmCmd(), newMvCmd(), newCloneCmd())
+	root.AddCommand(newShellInitCmd(), newUseCmd(), newUnuseCmd(), newInternalShellUseCmd(), newInternalShellUnuseCmd(), newInternalShellHookCmd())
 	root.AddCommand(newRunCmd(), newInstallShimCmd(), newInternalShimExecCmd())
 	root.AddCommand(newForkCmd(), newShareCmd(), newRelinkCmd(), newClassifyCmd(), newStatusCmd())
 	root.AddCommand(newAdoptCmd())

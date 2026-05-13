@@ -34,12 +34,11 @@ const zshSnippet = `[[ $- == *i* ]] || return 0
 _CCS_SHELL_INIT_DONE=1
 
 ccs() {
-  if [ "$1" = use ]; then
-    shift
-    eval "$(command ccs __shell_use "$@")"
-  else
-    command ccs "$@"
-  fi
+  case "$1" in
+    use)    shift; eval "$(command ccs __shell_use "$@")" ;;
+    unuse)  eval "$(command ccs __shell_unuse)" ;;
+    *)      command ccs "$@" ;;
+  esac
 }
 
 _ccs_hook() {
@@ -56,12 +55,11 @@ const bashSnippet = `case $- in *i*) ;; *) return 0 ;; esac
 _CCS_SHELL_INIT_DONE=1
 
 ccs() {
-  if [ "$1" = use ]; then
-    shift
-    eval "$(command ccs __shell_use "$@")"
-  else
-    command ccs "$@"
-  fi
+  case "$1" in
+    use)    shift; eval "$(command ccs __shell_use "$@")" ;;
+    unuse)  eval "$(command ccs __shell_unuse)" ;;
+    *)      command ccs "$@" ;;
+  esac
 }
 
 _ccs_hook() {

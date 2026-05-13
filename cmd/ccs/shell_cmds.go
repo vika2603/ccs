@@ -33,19 +33,15 @@ func newShellInitCmd() *cobra.Command {
 
 func newUseCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:               "use [name]",
+		Use:               "use <name>",
 		Short:             "Switch active profile",
-		Args:              cobra.MaximumNArgs(1),
+		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: completeProfileNamesAtArg0,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, p, err := manager()
+			m, p, err := manager()
 			if err != nil {
 				return err
 			}
-			if len(args) == 0 {
-				return state.Clear(p.ActiveFile())
-			}
-			m, _, _ := manager()
 			if _, err := m.Path(args[0]); err != nil {
 				return err
 			}
@@ -54,22 +50,30 @@ func newUseCmd() *cobra.Command {
 	}
 }
 
+func newUnuseCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "unuse",
+		Short: "Deactivate the current profile",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			_, p, err := manager()
+			if err != nil {
+				return err
+			}
+			return state.Clear(p.ActiveFile())
+		},
+	}
+}
+
 func newInternalShellUseCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:    "__shell_use [name]",
+		Use:    "__shell_use <name>",
 		Hidden: true,
-		Args:   cobra.MaximumNArgs(1),
+		Args:   cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			m, p, err := manager()
 			if err != nil {
 				return err
-			}
-			if len(args) == 0 {
-				if err := state.Clear(p.ActiveFile()); err != nil {
-					return err
-				}
-				fmt.Fprint(cmd.OutOrStdout(), profileenv.RenderClearAll())
-				return nil
 			}
 			name := args[0]
 			path, err := m.Path(name)
@@ -90,6 +94,25 @@ func newInternalShellUseCmd() *cobra.Command {
 				Sig:       profileenv.Signature(name, envFile),
 			})
 			fmt.Fprint(cmd.OutOrStdout(), out)
+			return nil
+		},
+	}
+}
+
+func newInternalShellUnuseCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:    "__shell_unuse",
+		Hidden: true,
+		Args:   cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			_, p, err := manager()
+			if err != nil {
+				return err
+			}
+			if err := state.Clear(p.ActiveFile()); err != nil {
+				return err
+			}
+			fmt.Fprint(cmd.OutOrStdout(), profileenv.RenderClearAll())
 			return nil
 		},
 	}
