@@ -150,6 +150,93 @@ func (m Manager) Rename(oldName, newName string) error {
 	return nil
 }
 
+func (m Manager) Clone(source, dest string) error {
+	if err := state.ValidName(source); err != nil {
+		return err
+	}
+	if err := state.ValidName(dest); err != nil {
+		return err
+	}
+	srcDir := m.paths.ProfilePath(source)
+	if _, err := os.Stat(srcDir); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("profile %q does not exist", source)
+		}
+		return err
+	}
+	dstDir := m.paths.ProfilePath(dest)
+	if _, err := os.Stat(dstDir); err == nil {
+		return fmt.Errorf("profile %q already exists", dest)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.MkdirAll(dstDir, 0o755); err != nil {
+		return err
+	}
+	ok := false
+	defer func() {
+		if !ok {
+			_ = os.RemoveAll(dstDir)
+		}
+	}()
+	if err := fields.CreateSharedTargets(m.paths.SharedDir(), m.fields.Shared()); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		name := e.Name()
+		class := m.fields.Describe(name)
+		srcPath := filepath.Join(srcDir, name)
+		dstPath := filepath.Join(dstDir, name)
+		if class.Category == fields.Shared {
+			info, lerr := os.Lstat(srcPath)
+			if lerr != nil {
+				return lerr
+			}
+			if info.Mode()&os.ModeSymlink != 0 {
+				sharedPath := m.paths.SharedField(name)
+				if err := link.EnsureSymlink(sharedPath, dstPath); err != nil {
+					return err
+				}
+			} else {
+				if err := fields.CopyByKind(srcPath, dstPath, class.Kind); err != nil {
+					return err
+				}
+			}
+		} else {
+			if err := fields.CopyByKind(srcPath, dstPath, class.Kind); err != nil {
+				return err
+			}
+		}
+	}
+	if m.creds != nil {
+		data, err := m.creds.Read(srcDir)
+		if err == nil {
+			if werr := m.creds.Write(dstDir, data); werr != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not write credentials for cloned profile: %v\n", werr)
+			}
+		}
+	}
+	srcEnv := m.paths.EnvFile(source)
+	if _, err := os.Stat(srcEnv); err == nil {
+		if err := os.MkdirAll(m.paths.EnvDir(), 0o755); err != nil {
+			return err
+		}
+		data, err := os.ReadFile(srcEnv)
+		if err != nil {
+			return fmt.Errorf("read source env file: %w", err)
+		}
+		if err := os.WriteFile(m.paths.EnvFile(dest), data, 0o600); err != nil {
+			return fmt.Errorf("write cloned env file: %w", err)
+		}
+	}
+	ok = true
+	return nil
+}
+
 func (m Manager) Exists(name string) (bool, error) {
 	_, err := os.Stat(m.paths.ProfilePath(name))
 	if err == nil {

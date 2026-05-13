@@ -58,7 +58,7 @@ func (o Ops) Fork(profile, field string) error {
 	if err := os.Remove(linkPath); err != nil {
 		return err
 	}
-	return copyByKind(sharedPath, linkPath, kind)
+	return CopyByKind(sharedPath, linkPath, kind)
 }
 
 func (o Ops) Share(profile, field string, out io.Writer, in io.Reader) error {
@@ -102,7 +102,7 @@ func (o Ops) Share(profile, field string, out io.Writer, in io.Reader) error {
 	} else {
 		_ = os.RemoveAll(sharedPath)
 	}
-	if err := copyByKind(linkPath, sharedPath, kind); err != nil {
+	if err := CopyByKind(linkPath, sharedPath, kind); err != nil {
 		return err
 	}
 	if err := os.RemoveAll(linkPath); err != nil {
@@ -213,7 +213,7 @@ func sharedHasContent(path string) (bool, error) {
 	return info.Size() > 0, nil
 }
 
-func copyByKind(src, dst string, kind Kind) error {
+func CopyByKind(src, dst string, kind Kind) error {
 	switch kind {
 	case KindFile:
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {

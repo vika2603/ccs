@@ -169,6 +169,22 @@ func newRmCmd() *cobra.Command {
 	return cmd
 }
 
+func newCloneCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:               "clone <source> <new>",
+		Short:             "Clone an existing profile",
+		Args:              cobra.ExactArgs(2),
+		ValidArgsFunction: completeProfileNamesAtArg0,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			m, _, err := manager()
+			if err != nil {
+				return err
+			}
+			return m.Clone(args[0], args[1])
+		},
+	}
+}
+
 func newMvCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:               "mv <old> <new>",

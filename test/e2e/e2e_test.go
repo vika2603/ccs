@@ -143,6 +143,55 @@ func TestBackupRestore(t *testing.T) {
 	}
 }
 
+func TestCloneProfile(t *testing.T) {
+	bin := buildBinary(t)
+	home := t.TempDir()
+	run(t, bin, home, "init")
+	run(t, bin, home, "new", "src")
+
+	// Write isolated data into source profile.
+	if err := os.WriteFile(filepath.Join(home, ".ccs", "profiles", "src", ".claude.json"), []byte(`{"user":"alice"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Write shared content.
+	if err := os.WriteFile(filepath.Join(home, ".ccs", "shared", "CLAUDE.md"), []byte("shared-mem\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	run(t, bin, home, "clone", "src", "dst")
+
+	// Isolated file should be a real copy.
+	b, err := os.ReadFile(filepath.Join(home, ".ccs", "profiles", "dst", ".claude.json"))
+	if err != nil || string(b) != `{"user":"alice"}` {
+		t.Errorf("cloned .claude.json: %v / %q", err, b)
+	}
+
+	// Shared field should be a symlink resolving to shared content.
+	dstCLAUDE := filepath.Join(home, ".ccs", "profiles", "dst", "CLAUDE.md")
+	info, err := os.Lstat(dstCLAUDE)
+	if err != nil {
+		t.Fatalf("lstat dst CLAUDE.md: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Error("dst CLAUDE.md should be a symlink")
+	}
+	if b, err := os.ReadFile(dstCLAUDE); err != nil || string(b) != "shared-mem\n" {
+		t.Errorf("dst CLAUDE.md content: %v / %q", err, b)
+	}
+
+	// Source should be unaffected.
+	b, err = os.ReadFile(filepath.Join(home, ".ccs", "profiles", "src", ".claude.json"))
+	if err != nil || string(b) != `{"user":"alice"}` {
+		t.Errorf("source .claude.json altered: %v / %q", err, b)
+	}
+
+	// ls should show both.
+	out := run(t, bin, home, "ls")
+	if !strings.Contains(out, "src") || !strings.Contains(out, "dst") {
+		t.Errorf("ls: %q", out)
+	}
+}
+
 // TestRunRoutesThroughShimPreservesProfile reproduces the bug where
 // `ccs run <profile>` execs a wrapper (e.g. `caffeinate claude`) whose
 // child resolves `claude` via PATH back through ~/.ccs/bin/claude. The
