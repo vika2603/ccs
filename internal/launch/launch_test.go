@@ -9,13 +9,18 @@ import (
 	"testing"
 )
 
-func TestEnvSetsOrRemovesConfigDir(t *testing.T) {
-	in := []string{"PATH=/usr/bin", "CLAUDE_CONFIG_DIR=/old"}
-	if got := Env(in, "/new"); !slices.Equal(got, []string{"PATH=/usr/bin", "CLAUDE_CONFIG_DIR=/new"}) {
-		t.Errorf("Env(/new) = %v", got)
+func TestEnv(t *testing.T) {
+	in := []string{
+		"PATH=/usr/bin", "CLAUDE_CONFIG_DIR=/old", "CCS_PROFILE=outer",
+		"ANTHROPIC_AUTH_TOKEN=t", "ANTHROPIC_BASE_URL=https://gw", "ANTHROPIC_MODEL=m",
+		"CLAUDE_CODE_OAUTH_TOKEN=o", "CLAUDE_CODE_EFFORT_LEVEL=high",
 	}
-	if got := Env(in, ""); !slices.Equal(got, []string{"PATH=/usr/bin"}) {
-		t.Errorf("Env(\"\") = %v", got)
+	kept := []string{"PATH=/usr/bin", "CLAUDE_CODE_EFFORT_LEVEL=high"}
+	if got, want := Env(in, "work", "/new"), append(slices.Clone(kept), "CLAUDE_CONFIG_DIR=/new", "CCS_PROFILE=work"); !slices.Equal(got, want) {
+		t.Errorf("login profile:\n got %v\nwant %v", got, want)
+	}
+	if got, want := Env(in, "gw", ""), append(slices.Clone(kept), "CCS_PROFILE=gw"); !slices.Equal(got, want) {
+		t.Errorf("profile on ~/.claude:\n got %v\nwant %v", got, want)
 	}
 }
 

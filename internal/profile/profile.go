@@ -17,6 +17,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/BurntSushi/toml"
 
@@ -25,9 +26,17 @@ import (
 )
 
 // identity lists config-directory entries that belong to one account and
-// are never linked: the global state with the OAuth account, the Linux
-// credentials file, and the backups Claude Code makes of the global state.
-var identity = []string{".claude.json", ".credentials.json", "backups"}
+// are never linked: the global state with the OAuth account (.claude.json,
+// or .config.json where an older install left one, which Claude Code then
+// prefers), its backups, the Linux credentials file, and the organization
+// policy, managed settings, and connector caches Claude Code fetches per
+// account.
+var identity = []string{
+	".claude.json", ".config.json", "backups", ".credentials.json",
+	"policy-limits.json", "policy-limits.json.stamp.json",
+	"remote-settings.json", "remote-settings-consent.json",
+	"mcp-needs-auth-cache.json", "statsig",
+}
 
 // Profile is the content of ~/.ccs/profiles/<name>.toml.
 type Profile struct {
@@ -159,11 +168,12 @@ func (pr Profile) ConfigDir(p layout.Paths) string {
 
 // Sync brings a login profile's directory in line with ~/.claude: every
 // ~/.claude entry missing from it is linked, isolated entries that are still
-// links are replaced by a copy, and links to entries removed from ~/.claude
-// are dropped. Real files and directories already in the account directory
-// are never touched, so nothing the account wrote is lost; to share such an
-// entry again, delete it from the account directory.
-func Sync(p layout.Paths, pr Profile) error {
+// links are replaced by a copy, and links to identity entries or to entries
+// removed from ~/.claude are dropped. Real files and directories already in
+// the account directory are never touched, so nothing the account wrote is
+// lost; to share such an entry again, delete it from the account directory.
+// Concurrent launches of the same profile sync one after the other.
+func Sync(p layout.Paths, pr Profile) (err error) {
 	if !pr.Login {
 		return nil
 	}
@@ -171,6 +181,11 @@ func Sync(p layout.Paths, pr Profile) error {
 	if err := os.MkdirAll(accountDir, 0o700); err != nil {
 		return err
 	}
+	unlock, err := lockFile(p.SyncLock(pr.Name))
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, unlock()) }()
 	entries, err := os.ReadDir(p.ClaudeDir())
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -180,13 +195,11 @@ func Sync(p layout.Paths, pr Profile) error {
 	}
 	for _, e := range entries {
 		name := e.Name()
-		if slices.Contains(identity, name) {
-			continue
-		}
 		src := filepath.Join(p.ClaudeDir(), name)
 		dst := filepath.Join(accountDir, name)
 		current, err := os.Readlink(dst)
 		isLink := err == nil
+		linked := isLink && current == src
 		exists := isLink
 		if !isLink {
 			if _, err := os.Lstat(dst); err == nil {
@@ -196,15 +209,15 @@ func Sync(p layout.Paths, pr Profile) error {
 			}
 		}
 		switch {
-		case slices.Contains(pr.Isolate, name):
-			if isLink && current == src {
+		case slices.Contains(identity, name):
+			if linked {
 				if err := os.Remove(dst); err != nil {
 					return err
 				}
-				exists = false
 			}
-			if !exists {
-				if err := fsutil.CopyTree(src, dst); err != nil {
+		case slices.Contains(pr.Isolate, name):
+			if linked || !exists {
+				if err := copyIn(src, dst); err != nil {
 					return fmt.Errorf("isolate %s: %w", name, err)
 				}
 			}
@@ -215,6 +228,42 @@ func Sync(p layout.Paths, pr Profile) error {
 		}
 	}
 	return pruneLinks(accountDir, p.ClaudeDir())
+}
+
+// copyIn copies src to dst, replacing a link at dst. The copy is staged next
+// to dst and renamed into place, so an interrupted copy never leaves a
+// partial dst that later syncs would keep as the account's own data.
+func copyIn(src, dst string) error {
+	tmp, err := os.MkdirTemp(filepath.Dir(dst), ".ccs-copy-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+	staged := filepath.Join(tmp, filepath.Base(dst))
+	if err := fsutil.CopyTree(src, staged); err != nil {
+		return err
+	}
+	if err := os.Remove(dst); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return os.Rename(staged, dst)
+}
+
+// lockFile waits for an exclusive lock on path and returns the function that
+// releases it.
+func lockFile(path string) (func() error, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		return nil, errors.Join(err, f.Close())
+	}
+	// Closing the file releases the lock.
+	return f.Close, nil
 }
 
 // pruneLinks removes links in accountDir that point to a missing entry of
@@ -266,27 +315,50 @@ func WriteSettings(p layout.Paths, pr Profile) (string, error) {
 	return path, fsutil.WriteFileAtomic(path, buf.Bytes(), 0o600)
 }
 
-// Remove deletes profile name: its file, its settings file, and for a login
-// profile its account directory. deleteCreds removes the account's stored
-// OAuth token and is called before the directory is deleted.
+// Remove deletes profile name: its file, its run files, and its account
+// directory if there is one. deleteCreds removes the account's stored OAuth
+// token and is called before the directory is deleted. The profile file is
+// not parsed, so an invalid profile, or one that no longer sets login, is
+// removed completely too.
 func Remove(p layout.Paths, name string, deleteCreds func(configDir string) error) error {
 	if name == layout.DefaultProfile {
 		return errors.New("the default profile is ~/.claude itself and cannot be removed")
 	}
-	pr, err := Load(p, name)
+	if err := layout.ValidName(name); err != nil {
+		return err
+	}
+	file, accountDir := p.ProfileFile(name), p.AccountDir(name)
+	fileExists, err := pathExists(file)
 	if err != nil {
 		return err
 	}
-	if pr.Login {
-		if err := deleteCreds(p.AccountDir(name)); err != nil {
+	accountExists, err := pathExists(accountDir)
+	if err != nil {
+		return err
+	}
+	if !fileExists && !accountExists {
+		return fmt.Errorf("profile %q does not exist: %w", name, ErrNotFound)
+	}
+	if accountExists {
+		if err := deleteCreds(accountDir); err != nil {
 			return fmt.Errorf("delete stored login: %w", err)
 		}
-		if err := os.RemoveAll(p.AccountDir(name)); err != nil {
+		if err := os.RemoveAll(accountDir); err != nil {
 			return err
 		}
 	}
-	if err := os.Remove(p.SettingsFile(name)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+	for _, path := range []string{p.SettingsFile(name), p.SyncLock(name), file} {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
 	}
-	return os.Remove(p.ProfileFile(name))
+	return nil
+}
+
+func pathExists(path string) (bool, error) {
+	_, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return err == nil, err
 }

@@ -53,7 +53,13 @@ linked on the next start.
 
 `[settings]` is passed to `claude --settings`, so it applies on top of
 `~/.claude/settings.json` for that profile only, and its `env` wins over the
-same variables in the shell or in `~/.claude/settings.json`.
+same variables in `~/.claude/settings.json`.
+
+ccs ignores `ANTHROPIC_*` variables and `CLAUDE_CODE_OAUTH_TOKEN` from the
+shell, so a profile started from inside another profile's session uses its
+own login or gateway. Put API endpoints and keys in `[settings.env]` (or in
+`~/.claude/settings.json` for `default`). A `claude` started inside a ccs
+session, for example by a hook, runs with that session's profile.
 
 ## Usage
 

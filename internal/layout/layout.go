@@ -42,6 +42,11 @@ func (p Paths) SettingsFile(name string) string {
 	return filepath.Join(p.RunDir(), name+".settings.json")
 }
 
+// SyncLock serializes syncs of a login profile's directory.
+func (p Paths) SyncLock(name string) string {
+	return filepath.Join(p.RunDir(), name+".lock")
+}
+
 // ShimPath is the claude shim written by `ccs init`.
 func (p Paths) ShimPath() string { return filepath.Join(p.BinDir(), "claude") }
 

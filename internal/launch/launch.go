@@ -9,12 +9,24 @@ import (
 	"strings"
 )
 
-// Env returns env with CLAUDE_CONFIG_DIR set to configDir, or removed when
-// configDir is "" so Claude Code falls back to ~/.claude.
-func Env(env []string, configDir string) []string {
-	out := make([]string, 0, len(env)+1)
+// ProfileVar names the profile a claude process was launched with, so a
+// claude started inside it can run with the same profile.
+const ProfileVar = "CCS_PROFILE"
+
+// Env returns env for launching profile name: CLAUDE_CONFIG_DIR is set to
+// configDir, or removed when configDir is "" so Claude Code uses ~/.claude,
+// and ProfileVar is set to name.
+//
+// Inherited ANTHROPIC_* variables and CLAUDE_CODE_OAUTH_TOKEN are removed.
+// They choose the endpoint, credentials, and models, which the profile's
+// settings define; Claude Code exports settings env to its children, so a
+// profile started from inside another profile's session would otherwise run
+// on the outer profile's gateway or login.
+func Env(env []string, name, configDir string) []string {
+	out := make([]string, 0, len(env)+2)
 	for _, e := range env {
-		if name, _, _ := strings.Cut(e, "="); name == "CLAUDE_CONFIG_DIR" {
+		key, _, _ := strings.Cut(e, "=")
+		if key == "CLAUDE_CONFIG_DIR" || key == ProfileVar || key == "CLAUDE_CODE_OAUTH_TOKEN" || strings.HasPrefix(key, "ANTHROPIC_") {
 			continue
 		}
 		out = append(out, e)
@@ -22,7 +34,7 @@ func Env(env []string, configDir string) []string {
 	if configDir != "" {
 		out = append(out, "CLAUDE_CONFIG_DIR="+configDir)
 	}
-	return out
+	return append(out, ProfileVar+"="+name)
 }
 
 // Resolve looks up name in $PATH like exec.LookPath, skipping skipDir so that

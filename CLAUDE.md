@@ -31,6 +31,7 @@ ccs runs Claude Code with several accounts or API gateways on top of one `~/.cla
   profiles/<name>.toml          a profile (0600; may hold API tokens)
   accounts/<name>/              CLAUDE_CONFIG_DIR of a login profile
   run/<name>.settings.json      [settings] of a profile, written before each launch (0600)
+  run/<name>.lock               flock serializing profile.Sync of a login profile
   state/active                  active profile name (replaced atomically; missing means default)
   bin/claude                    shim written by `ccs init`
 ```
@@ -47,14 +48,21 @@ isolate = []         # login only: ~/.claude entries this profile keeps to itsel
 
 - Without `login`, Claude Code runs on `~/.claude` itself (`CLAUDE_CONFIG_DIR` removed from the environment). This suits API gateways: `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY` take priority over the OAuth login stored for `~/.claude`.
 - With `login`, `CLAUDE_CONFIG_DIR` is `~/.ccs/accounts/<name>`. Claude Code keeps one login per config directory (the macOS Keychain service name is derived from the directory path, see `internal/creds/service.go`; `ccs rm` deletes that item), which is why a second OAuth account needs its own directory.
-- `profile.Sync` runs before every launch of a login profile: each `~/.claude` entry missing from the account directory is symlinked to `~/.claude`; an isolated entry that is still such a link is replaced by a copy, and a missing isolated entry is copied in, and links to entries removed from `~/.claude` are dropped. `.claude.json`, `.credentials.json`, and `backups` (backups of `.claude.json`) are never linked. Real files already in the account directory are never replaced, so nothing an account wrote is lost; sharing an entry again means deleting the account's copy.
+- `profile.Sync` runs before every launch of a login profile, under `run/<name>.lock`:
+  - each `~/.claude` entry missing from the account directory is symlinked to `~/.claude`;
+  - an isolated entry that is still such a link, or is missing, is copied in. The copy is staged in a temporary sibling and renamed into place, so an interrupted copy leaves nothing behind;
+  - links to entries removed from `~/.claude` are dropped.
+  - Entries in `identity` (`internal/profile/profile.go`) are never linked, and existing links to them are removed: `.claude.json` and `.config.json` (global state with `oauthAccount`), `backups`, `.credentials.json`, and the organization policy, remote settings, and connector caches Claude Code keeps per account. Add a name there when Claude Code starts keeping another per-account file in the config directory.
+  - Real files already in the account directory are never replaced, so nothing an account wrote is lost; sharing an entry again means deleting the account's copy.
 - `[settings]` is written to `run/<name>.settings.json` and passed as `claude --settings <file> ...`. It must come before any claude subcommand (`claude mcp list --settings x` is rejected). A file is used instead of inline JSON so tokens never appear on a command line. Claude Code applies `--settings` above user settings, merges `env` by variable name, and lets settings `env` win over the process environment.
+- `profile.Remove` does not parse the profile file: it deletes the account directory and its Keychain item whenever the directory exists, so an invalid profile or one edited to drop `login` leaves nothing behind.
 - `profile.Account` derives the label shown by `ls` from `ANTHROPIC_BASE_URL` in `[settings]` or the settings.json the profile runs with, otherwise the `oauthAccount` in the profile's `.claude.json`; it never reads tokens.
 
 ## Launching (`cmd/ccs/root.go`, `internal/launch`)
 
 - `ccs [name] [-- args]` launches the named profile, or the active one. A `--` after the name is dropped before the args reach claude, because flag parsing stops at the name.
-- `ccs -- args` (leading `--`, `cmd.ArgsLenAtDash() == 0`) and the shim behave like plain `claude args`: a `CLAUDE_CONFIG_DIR` already set by the caller is used as is, otherwise the active profile applies. Honoring the caller's directory keeps a wrapper that resolves `claude` back to the shim on the profile it was started with.
+- Every profile launch goes through `launch.Env`: it sets `CCS_PROFILE=<name>`, sets or removes `CLAUDE_CONFIG_DIR`, and removes inherited `ANTHROPIC_*` and `CLAUDE_CODE_OAUTH_TOKEN`. Claude Code exports settings `env` to its children, so without the removal a profile started inside another profile's session would run on the outer gateway token instead of its own login. Endpoint, credentials, and models therefore come only from settings (`[settings.env]` or `~/.claude/settings.json`), never from the shell.
+- `ccs -- args` (leading `--`, `cmd.ArgsLenAtDash() == 0`) and the shim behave like plain `claude args`, in this order: inside a ccs-launched session (`CCS_PROFILE` set and `CLAUDE_CONFIG_DIR` still matching that profile) the same profile is launched again; otherwise a `CLAUDE_CONFIG_DIR` set by the caller is used as is, with the environment untouched; otherwise the active profile applies. This keeps a hook, the Bash tool, or a wrapper that resolves `claude` back to the shim on the profile its session was started with.
 - `launch.Resolve` skips `~/.ccs/bin` when resolving `claude`, so the shim never execs itself.
 - The hidden `__shim_exec claude [args]` command is the contract with the generated shim script (`shimScript` in `cmd/ccs/commands.go`); existing shims call it until the next `ccs init`, so keep its argument shape stable. `ccs init` replaces a symlink at the shim path instead of writing through it.
 

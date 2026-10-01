@@ -76,6 +76,7 @@ func TestSyncLinksSharesAndIsolates(t *testing.T) {
 	writeFile(t, filepath.Join(claude, "history.jsonl"), "shared-history")
 	writeFile(t, filepath.Join(claude, ".credentials.json"), "secret")
 	writeFile(t, filepath.Join(claude, "backups", "b.json"), "{}")
+	writeFile(t, filepath.Join(claude, "policy-limits.json"), "{}")
 
 	pr := Profile{Name: "work", Login: true, Isolate: []string{"history.jsonl"}}
 	acct := p.AccountDir("work")
@@ -89,7 +90,7 @@ func TestSyncLinksSharesAndIsolates(t *testing.T) {
 			t.Errorf("%s should link to ~/.claude: %q %v", name, target, err)
 		}
 	}
-	for _, name := range []string{".credentials.json", "backups"} {
+	for _, name := range []string{".credentials.json", "backups", "policy-limits.json"} {
 		if _, err := os.Lstat(filepath.Join(acct, name)); err == nil {
 			t.Errorf("identity entry %s must not be linked", name)
 		}
@@ -145,6 +146,78 @@ func TestSyncLinksSharesAndIsolates(t *testing.T) {
 	}
 }
 
+func TestSyncUnlinksIdentityEntries(t *testing.T) {
+	p := layout.New(t.TempDir())
+	writeFile(t, filepath.Join(p.ClaudeDir(), "remote-settings.json"), "{}")
+	acct := p.AccountDir("work")
+	if err := os.MkdirAll(acct, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(acct, "remote-settings.json")
+	if err := os.Symlink(filepath.Join(p.ClaudeDir(), "remote-settings.json"), link); err != nil {
+		t.Fatal(err)
+	}
+	if err := Sync(p, Profile{Name: "work", Login: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Errorf("link to an identity entry should be removed: %v", err)
+	}
+}
+
+// A failed isolate copy must leave nothing at the destination that a later
+// sync would keep as the account's own, partial data.
+func TestSyncIsolateCopyIsAllOrNothing(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads unreadable files")
+	}
+	p := layout.New(t.TempDir())
+	writeFile(t, filepath.Join(p.ClaudeDir(), "projects", "a.txt"), "a")
+	locked := filepath.Join(p.ClaudeDir(), "projects", "z.txt")
+	writeFile(t, locked, "z")
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	pr := Profile{Name: "work", Login: true, Isolate: []string{"projects"}}
+	if err := Sync(p, pr); err == nil {
+		t.Fatal("copy of an unreadable file should fail")
+	}
+	if _, err := os.Lstat(filepath.Join(p.AccountDir("work"), "projects")); !os.IsNotExist(err) {
+		t.Fatalf("failed copy left a destination: %v", err)
+	}
+	if err := os.Chmod(locked, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Sync(p, pr); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(filepath.Join(p.AccountDir("work"), "projects", "z.txt")); err != nil || string(b) != "z" {
+		t.Errorf("retried copy incomplete: %q %v", b, err)
+	}
+}
+
+func TestConcurrentSyncs(t *testing.T) {
+	p := layout.New(t.TempDir())
+	for _, name := range []string{"a", "b", "c", "d"} {
+		writeFile(t, filepath.Join(p.ClaudeDir(), name, "f"), name)
+	}
+	pr := Profile{Name: "work", Login: true, Isolate: []string{"a", "b"}}
+	errs := make(chan error, 8)
+	for range cap(errs) {
+		go func() { errs <- Sync(p, pr) }()
+	}
+	for range cap(errs) {
+		if err := <-errs; err != nil {
+			t.Errorf("concurrent sync: %v", err)
+		}
+	}
+	for _, name := range []string{"a", "b", "c", "d"} {
+		if b, err := os.ReadFile(filepath.Join(p.AccountDir("work"), name, "f")); err != nil || string(b) != name {
+			t.Errorf("%s: %q %v", name, b, err)
+		}
+	}
+}
+
 func TestWriteSettingsIsPrivateAndRemovedWhenEmpty(t *testing.T) {
 	p := layout.New(t.TempDir())
 	pr := Profile{Name: "gw", Settings: map[string]any{"env": map[string]any{"ANTHROPIC_AUTH_TOKEN": "t"}}}
@@ -187,6 +260,33 @@ func TestRemove(t *testing.T) {
 	}
 	if err := Remove(p, layout.DefaultProfile, nil); err == nil {
 		t.Error("the default profile must not be removable")
+	}
+	if err := Remove(p, "ghost", nil); !errors.Is(err, ErrNotFound) {
+		t.Errorf("removing a missing profile: %v", err)
+	}
+}
+
+// Remove must not depend on the file's content: an unparsable profile, or one
+// edited to drop login, still takes its account directory and login with it.
+func TestRemoveIgnoresProfileContent(t *testing.T) {
+	for name, content := range map[string]string{"broken": "login = tru", "flipped": "login = false\n"} {
+		p := layout.New(t.TempDir())
+		if err := Create(p, name, true); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, p.ProfileFile(name), content)
+		var deleted string
+		if err := Remove(p, name, func(dir string) error { deleted = dir; return nil }); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if deleted != p.AccountDir(name) {
+			t.Errorf("%s: stored login not deleted", name)
+		}
+		for _, path := range []string{p.ProfileFile(name), p.AccountDir(name)} {
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Errorf("%s: %s should be gone: %v", name, path, err)
+			}
+		}
 	}
 }
 

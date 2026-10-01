@@ -88,13 +88,21 @@ func run(p layout.Paths, name string, args []string) error {
 		// subcommand rejects the flag.
 		argv = append(argv, "--settings", settings)
 	}
-	return execClaude(p, append(argv, args...), launch.Env(os.Environ(), pr.ConfigDir(p)))
+	return execClaude(p, append(argv, args...), launch.Env(os.Environ(), name, pr.ConfigDir(p)))
 }
 
-// runShim runs claude the way `claude args...` does through the PATH shim:
-// a CLAUDE_CONFIG_DIR already set by the caller is used as is, otherwise the
-// active profile applies.
+// runShim runs claude the way `claude args...` does through the PATH shim.
+// Inside a session launched by ccs it keeps that session's profile, which
+// launch.ProfileVar records because a profile without login leaves
+// CLAUDE_CONFIG_DIR unset. Otherwise a CLAUDE_CONFIG_DIR set by the caller is
+// used as is, and failing that the active profile applies.
 func runShim(p layout.Paths, args []string) error {
+	if name := os.Getenv(launch.ProfileVar); name != "" {
+		// A CLAUDE_CONFIG_DIR changed since the launch is the caller's choice.
+		if pr, err := profile.Load(p, name); err == nil && pr.ConfigDir(p) == os.Getenv("CLAUDE_CONFIG_DIR") {
+			return run(p, name, args)
+		}
+	}
 	if os.Getenv("CLAUDE_CONFIG_DIR") != "" {
 		return execClaude(p, append([]string{"claude"}, args...), os.Environ())
 	}

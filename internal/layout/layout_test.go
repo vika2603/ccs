@@ -14,6 +14,7 @@ func TestPathsFromHome(t *testing.T) {
 		p.ProfileFile("work"):  filepath.Join(home, ".ccs", "profiles", "work.toml"),
 		p.AccountDir("work"):   filepath.Join(home, ".ccs", "accounts", "work"),
 		p.SettingsFile("work"): filepath.Join(home, ".ccs", "run", "work.settings.json"),
+		p.SyncLock("work"):     filepath.Join(home, ".ccs", "run", "work.lock"),
 		p.ShimPath():           filepath.Join(home, ".ccs", "bin", "claude"),
 		p.ClaudeDir():          filepath.Join(home, ".claude"),
 		p.ClaudeJSON():         filepath.Join(home, ".claude.json"),
