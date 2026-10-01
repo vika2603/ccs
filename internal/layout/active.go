@@ -15,11 +15,21 @@ import (
 
 var nameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
+// DefaultProfile names ~/.claude itself.
+const DefaultProfile = "default"
+
+// reserved holds names that would be shadowed by `ccs <name>` subcommands
+// or that name the default profile.
 var reserved = map[string]struct{}{
-	"default": {},
-	"shared":  {},
-	"state":   {},
-	"config":  {},
+	DefaultProfile: {},
+	"init":         {},
+	"new":          {},
+	"edit":         {},
+	"ls":           {},
+	"use":          {},
+	"rm":           {},
+	"help":         {},
+	"completion":   {},
 }
 
 func ValidName(name string) error {

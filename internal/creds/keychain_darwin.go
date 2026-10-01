@@ -4,7 +4,6 @@ package creds
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"os/exec"
 	"os/user"
@@ -79,31 +78,4 @@ func (k keychainStore) deleteService(service string) error {
 		return fmt.Errorf("security delete: %w: %s", err, strings.TrimSpace(s))
 	}
 	return nil
-}
-
-func (k keychainStore) Exists(profile string) (bool, error) {
-	_, err := k.Read(profile)
-	if err == nil {
-		return true, nil
-	}
-	if errors.Is(err, ErrNotFound) {
-		return false, nil
-	}
-	return false, err
-}
-
-// ListServices returns the service names of all generic-password items in the
-// user's default keychain.
-func ListServices() ([]string, error) {
-	out, err := exec.Command("/usr/bin/security", "dump-keychain").Output()
-	if err != nil {
-		return nil, err
-	}
-	var services []string
-	for l := range strings.SplitSeq(string(out), "\n") {
-		if svc, ok := strings.CutPrefix(strings.TrimSpace(l), `"svce"<blob>="`); ok {
-			services = append(services, strings.TrimSuffix(svc, `"`))
-		}
-	}
-	return services, nil
 }

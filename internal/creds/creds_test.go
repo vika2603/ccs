@@ -45,8 +45,6 @@ func (f *migrateStoreFake) Delete(profile string) error {
 	return nil
 }
 
-func (f *migrateStoreFake) Exists(profile string) (bool, error) { return true, nil }
-
 type migrateReadMismatchFake struct{ migrateStoreFake }
 
 func (f *migrateReadMismatchFake) Read(profile string) ([]byte, error) {

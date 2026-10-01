@@ -1,44 +1,28 @@
-package profileenv
+// Package launch builds the environment and resolves the binary used to exec
+// claude.
+package launch
 
 import (
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 )
 
-// BuildEnv returns env with CLAUDE_CONFIG_DIR forced to configDir and with
-// profileEnv entries overlaid on top of any same-named entries already present.
-// profileEnv may be nil.
-func BuildEnv(env []string, configDir string, profileEnv map[string]string) []string {
-	override := make(map[string]struct{}, len(profileEnv)+1)
-	override["CLAUDE_CONFIG_DIR"] = struct{}{}
-	for k := range profileEnv {
-		override[k] = struct{}{}
-	}
-	out := make([]string, 0, len(env)+len(profileEnv)+1)
+// Env returns env with CLAUDE_CONFIG_DIR set to configDir, or removed when
+// configDir is "" so Claude Code falls back to ~/.claude.
+func Env(env []string, configDir string) []string {
+	out := make([]string, 0, len(env)+1)
 	for _, e := range env {
-		name, _, ok := strings.Cut(e, "=")
-		if !ok {
-			out = append(out, e)
-			continue
-		}
-		if _, ovr := override[name]; ovr {
+		if name, _, _ := strings.Cut(e, "="); name == "CLAUDE_CONFIG_DIR" {
 			continue
 		}
 		out = append(out, e)
 	}
-	keys := make([]string, 0, len(profileEnv))
-	for k := range profileEnv {
-		keys = append(keys, k)
+	if configDir != "" {
+		out = append(out, "CLAUDE_CONFIG_DIR="+configDir)
 	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		out = append(out, k+"="+profileEnv[k])
-	}
-	out = append(out, "CLAUDE_CONFIG_DIR="+configDir)
 	return out
 }
 

@@ -13,48 +13,26 @@ import (
 // contains real files and directories. File and directory permissions are
 // preserved.
 func CopyTree(src, dst string) error {
-	return copyTree(src, dst, true)
-}
-
-// CopyTreeNoFollow copies src to dst recursively and recreates symlinks with
-// their original targets instead of following them.
-func CopyTreeNoFollow(src, dst string) error {
-	return copyTree(src, dst, false)
-}
-
-func copyTree(src, dst string, follow bool) error {
-	stat := os.Lstat
-	if follow {
-		stat = os.Stat
-	}
-	info, err := stat(src)
+	info, err := os.Stat(src)
 	if err != nil {
 		return err
 	}
-	switch {
-	case info.Mode()&os.ModeSymlink != 0:
-		target, err := os.Readlink(src)
-		if err != nil {
-			return err
-		}
-		return os.Symlink(target, dst)
-	case info.IsDir():
-		if err := os.MkdirAll(dst, info.Mode().Perm()); err != nil {
-			return err
-		}
-		entries, err := os.ReadDir(src)
-		if err != nil {
-			return err
-		}
-		for _, e := range entries {
-			if err := copyTree(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name()), follow); err != nil {
-				return err
-			}
-		}
-		return nil
-	default:
+	if !info.IsDir() {
 		return CopyFile(src, dst, info.Mode().Perm())
 	}
+	if err := os.MkdirAll(dst, info.Mode().Perm()); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if err := CopyTree(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // CopyFile copies the contents of the regular file src to dst, creating or

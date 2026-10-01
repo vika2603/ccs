@@ -1,71 +1,18 @@
-package profileenv
+package launch
 
 import (
 	"os"
-	"strings"
+	"slices"
 	"testing"
 )
 
-func TestBuildEnvInsertsConfigDir(t *testing.T) {
-	env := BuildEnv([]string{"PATH=/usr/bin", "CLAUDE_CONFIG_DIR=/old"}, "/new", nil)
-	var got string
-	for _, e := range env {
-		if strings.HasPrefix(e, "CLAUDE_CONFIG_DIR=") {
-			got = e
-		}
+func TestEnvSetsOrRemovesConfigDir(t *testing.T) {
+	in := []string{"PATH=/usr/bin", "CLAUDE_CONFIG_DIR=/old"}
+	if got := Env(in, "/new"); !slices.Equal(got, []string{"PATH=/usr/bin", "CLAUDE_CONFIG_DIR=/new"}) {
+		t.Errorf("Env(/new) = %v", got)
 	}
-	if got != "CLAUDE_CONFIG_DIR=/new" {
-		t.Errorf("got %q", got)
-	}
-}
-
-func TestBuildEnvAddsWhenAbsent(t *testing.T) {
-	env := BuildEnv([]string{"PATH=/usr/bin"}, "/new", nil)
-	found := false
-	for _, e := range env {
-		if e == "CLAUDE_CONFIG_DIR=/new" {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("CLAUDE_CONFIG_DIR not added: %v", env)
-	}
-}
-
-func TestBuildEnvOverlaysProfileEnv(t *testing.T) {
-	in := []string{"PATH=/usr/bin", "FOO=old", "KEEP=ok"}
-	env := BuildEnv(in, "/new", map[string]string{
-		"FOO":                "new",
-		"ANTHROPIC_BASE_URL": "https://example.com",
-	})
-	want := map[string]string{
-		"PATH":               "/usr/bin",
-		"FOO":                "new",
-		"KEEP":               "ok",
-		"ANTHROPIC_BASE_URL": "https://example.com",
-		"CLAUDE_CONFIG_DIR":  "/new",
-	}
-	got := map[string]string{}
-	for _, e := range env {
-		name, val, ok := strings.Cut(e, "=")
-		if !ok {
-			continue
-		}
-		got[name] = val
-	}
-	for k, v := range want {
-		if got[k] != v {
-			t.Errorf("key %q: got %q want %q", k, got[k], v)
-		}
-	}
-	count := 0
-	for _, e := range env {
-		if strings.HasPrefix(e, "FOO=") {
-			count++
-		}
-	}
-	if count != 1 {
-		t.Errorf("FOO appeared %d times, want 1 (overlay should replace, not duplicate)", count)
+	if got := Env(in, ""); !slices.Equal(got, []string{"PATH=/usr/bin"}) {
+		t.Errorf("Env(\"\") = %v", got)
 	}
 }
 

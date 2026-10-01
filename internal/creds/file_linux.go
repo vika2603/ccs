@@ -41,17 +41,3 @@ func (s fileStore) Delete(profile string) error {
 	}
 	return err
 }
-
-func (s fileStore) Exists(profile string) (bool, error) {
-	_, err := os.Stat(s.path(profile))
-	if err == nil {
-		return true, nil
-	}
-	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	}
-	return false, err
-}
-
-// ListServices reports no keychain items; Linux stores credentials in files.
-func ListServices() ([]string, error) { return nil, nil }

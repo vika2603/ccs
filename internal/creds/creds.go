@@ -10,7 +10,6 @@ type Store interface {
 	Read(profileAbsPath string) ([]byte, error)
 	Write(profileAbsPath string, data []byte) error
 	Delete(profileAbsPath string) error
-	Exists(profileAbsPath string) (bool, error)
 }
 
 var ErrNotFound = notFoundError{}

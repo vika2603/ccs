@@ -6,49 +6,59 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/vika2603/ccs/internal/profileenv"
+	"github.com/vika2603/ccs/internal/layout"
 )
 
-// Account describes which account or endpoint a profile talks to, for
-// display only: "email (organization)" for OAuth logins, otherwise
-// "api: <host>" taken from ANTHROPIC_BASE_URL in the profile's env file or
-// settings.json. It returns "" when neither is known. Tokens are never read.
-func (m Manager) Account(name string) string {
-	dir := m.paths.ProfilePath(name)
-	var identity struct {
+// Account describes what pr talks to, for display only: "api: <host>" when
+// its settings (or, for profiles without their own settings,
+// ~/.claude/settings.json) set ANTHROPIC_BASE_URL, otherwise the OAuth
+// account recorded in the profile's global state. It returns "" when neither
+// is known. Tokens are never read.
+func Account(p layout.Paths, pr Profile) string {
+	if host := baseURLHost(pr.Settings); host != "" {
+		return "api: " + host
+	}
+	var shared struct {
+		Env map[string]any `json:"env"`
+	}
+	if readJSON(filepath.Join(p.ClaudeDir(), "settings.json"), &shared) == nil {
+		if host := baseURLHost(map[string]any{"env": shared.Env}); host != "" {
+			return "api: " + host
+		}
+	}
+
+	statePath := p.ClaudeJSON()
+	if pr.Login {
+		statePath = filepath.Join(p.AccountDir(pr.Name), ".claude.json")
+	}
+	var state struct {
 		OAuthAccount struct {
 			EmailAddress     string `json:"emailAddress"`
 			OrganizationName string `json:"organizationName"`
 		} `json:"oauthAccount"`
 	}
-	if readJSON(filepath.Join(dir, ".claude.json"), &identity) == nil && identity.OAuthAccount.EmailAddress != "" {
-		// Personal accounts get a default organization named after the email,
-		// which adds nothing to the label.
-		if org := identity.OAuthAccount.OrganizationName; org != "" && org != identity.OAuthAccount.EmailAddress+"'s Organization" {
-			return identity.OAuthAccount.EmailAddress + " (" + org + ")"
-		}
-		return identity.OAuthAccount.EmailAddress
-	}
-
-	baseURL := ""
-	if f, err := profileenv.Load(m.paths.EnvFile(name)); err == nil {
-		baseURL = f.Env["ANTHROPIC_BASE_URL"]
-	}
-	if baseURL == "" {
-		var settings struct {
-			Env map[string]string `json:"env"`
-		}
-		if readJSON(filepath.Join(dir, "settings.json"), &settings) == nil {
-			baseURL = settings.Env["ANTHROPIC_BASE_URL"]
-		}
-	}
-	if baseURL == "" {
+	if readJSON(statePath, &state) != nil || state.OAuthAccount.EmailAddress == "" {
 		return ""
 	}
-	if u, err := url.Parse(baseURL); err == nil && u.Host != "" {
-		return "api: " + u.Host
+	email, org := state.OAuthAccount.EmailAddress, state.OAuthAccount.OrganizationName
+	// Personal accounts get a default organization named after the email,
+	// which adds nothing to the label.
+	if org == "" || org == email+"'s Organization" {
+		return email
 	}
-	return "api: " + baseURL
+	return email + " (" + org + ")"
+}
+
+func baseURLHost(settings map[string]any) string {
+	env, _ := settings["env"].(map[string]any)
+	raw, _ := env["ANTHROPIC_BASE_URL"].(string)
+	if raw == "" {
+		return ""
+	}
+	if u, err := url.Parse(raw); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return raw
 }
 
 func readJSON(path string, v any) error {

@@ -30,10 +30,6 @@ func TestFileStoreRoundTrip(t *testing.T) {
 	if string(b) != string(payload) {
 		t.Errorf("file content mismatch")
 	}
-	exists, _ := s.Exists(dir)
-	if !exists {
-		t.Errorf("exists should be true")
-	}
 	if err := s.Delete(dir); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
