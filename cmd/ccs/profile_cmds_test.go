@@ -40,13 +40,13 @@ func TestInitNewLs(t *testing.T) {
 	}
 }
 
-func TestPathPrintsProfileDir(t *testing.T) {
+func TestStatusPrintsProfileDir(t *testing.T) {
 	home := t.TempDir()
 	runCmd(t, home, "init")
 	runCmd(t, home, "new", "work")
-	out, err := runCmd(t, home, "path", "work")
+	out, err := runCmd(t, home, "status", "work")
 	if err != nil {
-		t.Fatalf("path: %v", err)
+		t.Fatalf("status: %v", err)
 	}
 	want := filepath.Join(home, ".ccs", "profiles", "work")
 	if !strings.Contains(out, want) {
@@ -65,7 +65,7 @@ func TestCloneProfile(t *testing.T) {
 		t.Fatalf("write isolated file: %v", err)
 	}
 
-	if _, err := runCmd(t, home, "clone", "src", "dst"); err != nil {
+	if _, err := runCmd(t, home, "new", "dst", "--from", "src"); err != nil {
 		t.Fatalf("clone: %v", err)
 	}
 
@@ -102,11 +102,11 @@ func TestCloneProfile(t *testing.T) {
 func TestCloneNonexistentSource(t *testing.T) {
 	home := t.TempDir()
 	runCmd(t, home, "init")
-	_, err := runCmd(t, home, "clone", "nope", "dst")
+	_, err := runCmd(t, home, "new", "dst", "--from", "nope")
 	if err == nil {
 		t.Fatal("expected error for nonexistent source")
 	}
-	if !strings.Contains(err.Error(), "does not exist") {
+	if !strings.Contains(err.Error(), "neither a profile nor a directory") {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
@@ -133,5 +133,16 @@ func TestInitPreservesExistingConfig(t *testing.T) {
 	}
 	if !strings.Contains(out, "config.toml exists; leaving it.") {
 		t.Fatalf("missing idempotency note: %q", out)
+	}
+}
+
+func TestNewMoveRequiresFrom(t *testing.T) {
+	home := t.TempDir()
+	runCmd(t, home, "init")
+	if _, err := runCmd(t, home, "new", "work", "--move"); err == nil {
+		t.Fatal("--move without --from should fail")
+	}
+	if out, _ := runCmd(t, home, "ls"); strings.Contains(out, "work") {
+		t.Errorf("no profile should be created: %q", out)
 	}
 }

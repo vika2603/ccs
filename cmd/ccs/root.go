@@ -10,8 +10,13 @@ var Version = "dev"
 
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:               "ccs [profile] [-- claude-args...]",
-		Short:             "Claude Code profile switcher (bare `ccs` or `ccs <profile>` launches claude)",
+		Use:   "ccs [profile] [-- claude-args...]",
+		Short: "Claude Code profile switcher (bare `ccs` or `ccs <profile>` launches claude)",
+		Example: `  ccs                  launch claude with the active profile
+  ccs work             launch claude with profile "work"
+  ccs work -- -c       same, passing -c to claude
+  ccs -- -c            pass -c to claude with the active profile,
+                       or to the default ~/.claude when none is active`,
 		SilenceUsage:      true,
 		SilenceErrors:     true,
 		Version:           Version,
@@ -21,6 +26,16 @@ func newRootCmd() *cobra.Command {
 			a, err := loadApp()
 			if err != nil {
 				return err
+			}
+			// `ccs -- args...`: no profile named, so behave like `claude args...`
+			// through the shim: an explicit CLAUDE_CONFIG_DIR wins, then the
+			// active profile, then plain claude.
+			if cmd.ArgsLenAtDash() == 0 {
+				name := ""
+				if os.Getenv("CLAUDE_CONFIG_DIR") == "" {
+					name, _ = a.Active()
+				}
+				return a.launch(name, append(a.launchCommand(nil), args...))
 			}
 			name, rest := splitProfileArgs(args)
 			if name == "" {
@@ -40,16 +55,11 @@ func newRootCmd() *cobra.Command {
 	root.SetErr(os.Stderr)
 	root.Flags().SetInterspersed(false)
 	root.SetVersionTemplate("ccs {{.Version}}\n")
-	root.AddCommand(newInitCmd(), newNewCmd(), newLsCmd(), newPathCmd(), newRmCmd(), newMvCmd(), newCloneCmd())
-	root.AddCommand(newShellInitCmd(), newUseCmd(), newUnuseCmd())
-	root.AddCommand(newRunCmd(), newInternalShimExecCmd())
-	root.AddCommand(newForkCmd(), newShareCmd(), newClassifyCmd(), newStatusCmd())
-	root.AddCommand(newAdoptCmd())
-	root.AddCommand(newImportCmd())
-	root.AddCommand(newExportCmd())
-	root.AddCommand(newBackupCmd())
-	root.AddCommand(newRestoreCmd())
-	root.AddCommand(newDoctorCmd())
-	root.AddCommand(newEnvCmd())
+	root.AddCommand(
+		newInitCmd(), newNewCmd(), newLsCmd(), newUseCmd(), newRmCmd(), newMvCmd(),
+		newStatusCmd(), newEnvCmd(), newFieldCmd(), newDoctorCmd(),
+		newBackupCmd(), newRestoreCmd(),
+		newInternalShimExecCmd(),
+	)
 	return root
 }

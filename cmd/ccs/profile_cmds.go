@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
@@ -49,21 +51,62 @@ func newInitCmd() *cobra.Command {
 }
 
 func newNewCmd() *cobra.Command {
-	var blank bool
+	var blank, move bool
+	var from string
 	cmd := &cobra.Command{
 		Use:   "new <name>",
-		Short: "Create a new profile",
-		Args:  cobra.ExactArgs(1),
+		Short: "Create a profile: empty, cloned from a profile, or adopted from a directory",
+		Example: `  ccs new work                    empty profile linked to the shared assets
+  ccs new work --blank            empty profile without shared links
+  ccs new work2 --from work       clone profile "work"
+  ccs new home --from ~/.claude   adopt an existing Claude Code directory`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			a, err := loadApp()
 			if err != nil {
 				return err
 			}
-			return a.mgr.New(args[0], blank)
+			name := args[0]
+			switch {
+			case from == "" && move:
+				return errors.New("--move requires --from <dir>")
+			case from == "":
+				return a.mgr.New(name, blank)
+			case blank:
+				return errors.New("--blank cannot be combined with --from")
+			case a.isProfileRef(from):
+				if move {
+					return errors.New("--move only applies when --from is a directory")
+				}
+				return a.mgr.Clone(from, name)
+			default:
+				if info, err := os.Stat(from); err != nil || !info.IsDir() {
+					return fmt.Errorf("--from %q is neither a profile nor a directory", from)
+				}
+				return a.adopt(cmd, from, name, move)
+			}
 		},
 	}
-	cmd.Flags().BoolVarP(&blank, "blank", "b", false, "create a blank profile without linking shared assets")
+	cmd.Flags().BoolVarP(&blank, "blank", "b", false, "do not link the shared assets")
+	cmd.Flags().StringVar(&from, "from", "", "profile to clone, or Claude Code directory to adopt")
+	cmd.Flags().BoolVar(&move, "move", false, "with --from <dir>, move files instead of copying")
+	// Offer profile names and still let the shell complete directories.
+	_ = cmd.RegisterFlagCompletionFunc("from", func(c *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		names, _ := completeProfileNames(c, args, toComplete)
+		return names, cobra.ShellCompDirectiveDefault
+	})
 	return cmd
+}
+
+// isProfileRef reports whether from names an existing profile rather than a
+// directory. Anything containing a path separator is a directory, so
+// `--from ./work` adopts a directory even when a profile "work" exists.
+func (a app) isProfileRef(from string) bool {
+	if strings.ContainsRune(from, filepath.Separator) || from == "." || from == ".." {
+		return false
+	}
+	ok, err := a.mgr.Exists(from)
+	return err == nil && ok
 }
 
 func newLsCmd() *cobra.Command {
@@ -86,39 +129,13 @@ func newLsCmd() *cobra.Command {
 				if n == active {
 					marker = "*"
 				}
-				fmt.Fprintf(tw, "%s %s\t%s\n", marker, n, a.mgr.Account(n))
-			}
-			return tw.Flush()
-		},
-	}
-}
-
-func newPathCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:               "path [name]",
-		Short:             "Print a profile's absolute path (default: active)",
-		Args:              cobra.MaximumNArgs(1),
-		ValidArgsFunction: completeProfileNamesAtArg0,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			a, err := loadApp()
-			if err != nil {
-				return err
-			}
-			name := ""
-			if len(args) == 1 {
-				name = args[0]
-			} else {
-				name, _ = a.Active()
-				if name == "" {
-					return fmt.Errorf("no active profile")
+				if account := a.mgr.Account(n); account != "" {
+					fmt.Fprintf(tw, "%s %s\t%s\n", marker, n, account)
+				} else {
+					fmt.Fprintf(tw, "%s %s\n", marker, n)
 				}
 			}
-			path, err := a.mgr.Path(name)
-			if err != nil {
-				return err
-			}
-			cmd.Println(path)
-			return nil
+			return tw.Flush()
 		},
 	}
 }
@@ -139,7 +156,7 @@ func newRmCmd() *cobra.Command {
 			}
 			active, _ := a.Active()
 			if active == name && !force {
-				return fmt.Errorf("profile %q is active; use --force or `ccs use` first", name)
+				return fmt.Errorf("profile %q is active; use --force or switch with `ccs use <name>` first", name)
 			}
 			if !yes {
 				cmd.Printf("remove profile %q? (y/N) ", name)
@@ -159,22 +176,6 @@ func newRmCmd() *cobra.Command {
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "skip confirmation")
 	cmd.Flags().BoolVar(&force, "force", false, "allow removing the active profile")
 	return cmd
-}
-
-func newCloneCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:               "clone <source> <new>",
-		Short:             "Clone an existing profile",
-		Args:              cobra.ExactArgs(2),
-		ValidArgsFunction: completeProfileNamesAtArg0,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			a, err := loadApp()
-			if err != nil {
-				return err
-			}
-			return a.mgr.Clone(args[0], args[1])
-		},
-	}
 }
 
 func newMvCmd() *cobra.Command {

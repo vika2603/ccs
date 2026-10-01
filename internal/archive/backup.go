@@ -137,7 +137,7 @@ func packBackup(tw *tar.Writer, opts BackupPackOptions) error {
 // relative paths to resolve correctly.
 func UnpackBackup(tarPath, destDir string) (BackupManifest, error) {
 	var m BackupManifest
-	if err := extract(tarPath, destDir, BackupManifestName, &m, true); err != nil {
+	if err := extract(tarPath, destDir, BackupManifestName, &m); err != nil {
 		return BackupManifest{}, err
 	}
 	return m, nil
@@ -149,10 +149,9 @@ const maxManifestSize = 1 << 20
 // extract unpacks the gzipped tar at tarPath into destDir and decodes the
 // entry named manifestName into manifest. Entry names must stay inside
 // destDir and no entry may be placed beneath a symlink, so each symlink's
-// target is checked from the directory it is really created in. Symlink
-// entries are rejected unless allowSymlinks is set. Writes go through os.Root
-// as a second line of defense.
-func extract(tarPath, destDir, manifestName string, manifest any, allowSymlinks bool) error {
+// target is checked from the directory it is really created in. Writes go
+// through os.Root as a second line of defense.
+func extract(tarPath, destDir, manifestName string, manifest any) error {
 	f, err := os.Open(tarPath)
 	if err != nil {
 		return err
@@ -219,9 +218,6 @@ func extract(tarPath, destDir, manifestName string, manifest any, allowSymlinks 
 				return err
 			}
 		case tar.TypeSymlink:
-			if !allowSymlinks {
-				return fmt.Errorf("unexpected symlink entry %q", h.Name)
-			}
 			if err := validateSymlinkTarget(absDest, out, h.Linkname); err != nil {
 				return err
 			}

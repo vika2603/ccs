@@ -70,7 +70,7 @@ func (a app) profileOrActive(name string) (string, error) {
 		return "", err
 	}
 	if active == "" {
-		return "", errors.New("no profile given and no active profile; pass <profile> or run `ccs use` first")
+		return "", errors.New("no profile given and no active profile; pass <profile> or run `ccs use <name>` first")
 	}
 	return active, nil
 }

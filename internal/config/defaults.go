@@ -7,7 +7,7 @@ package config
 // .claude.json (oauthAccount, userID, migrationVersion, onboarding
 // flags) that pairs with the OAuth token in the platform credential
 // store. Export.Exclude lists entries that are intentionally dropped
-// from `ccs export` — caches and stats that can be regenerated.
+// from `ccs backup` — caches and stats that can be regenerated.
 //
 // .credentials.json stays in Isolated for Linux, where the file-backed
 // credential store writes to <profile>/.credentials.json.

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/vika2603/ccs/internal/archive"
 	"github.com/vika2603/ccs/internal/creds"
@@ -114,4 +115,30 @@ func newBackupCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&outFile, "output", "o", "", "output file (default: ccs-backup-<timestamp>.tar.gz)")
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite existing output file")
 	return cmd
+}
+
+// readPassphrase reads a passphrase from CCS_PASSPHRASE or, failing that,
+// from the terminal without echo.
+func readPassphrase(prompt string, confirm bool) (string, error) {
+	if v, ok := os.LookupEnv("CCS_PASSPHRASE"); ok {
+		return v, nil
+	}
+	fmt.Fprint(os.Stderr, prompt)
+	b, err := term.ReadPassword(int(os.Stdin.Fd()))
+	if err != nil {
+		return "", err
+	}
+	fmt.Fprintln(os.Stderr)
+	if confirm {
+		fmt.Fprint(os.Stderr, "Confirm: ")
+		b2, err := term.ReadPassword(int(os.Stdin.Fd()))
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintln(os.Stderr)
+		if string(b) != string(b2) {
+			return "", errors.New("passphrases do not match")
+		}
+	}
+	return string(b), nil
 }

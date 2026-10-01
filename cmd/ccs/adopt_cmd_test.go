@@ -126,7 +126,7 @@ func TestAdoptExistingDir(t *testing.T) {
 	os.WriteFile(filepath.Join(src, "CLAUDE.md"), []byte("memory"), 0o644)
 
 	runCmd(t, home, "init")
-	_, err := runCmd(t, home, "adopt", src, "main")
+	_, err := runCmd(t, home, "new", "main", "--from", src)
 	if err != nil {
 		t.Fatalf("adopt: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestAdoptStandardLayoutPicksUpHomeClaudeJSON(t *testing.T) {
 	}
 
 	runCmd(t, home, "init")
-	out, err := runCmd(t, home, "adopt", src, "main")
+	out, err := runCmd(t, home, "new", "main", "--from", src)
 	if err != nil {
 		t.Fatalf("adopt: %v\noutput: %s", err, out)
 	}

@@ -61,11 +61,10 @@ func shimScript(ccsPath, target string) string {
 // unchanged if nothing is active.
 //
 // If CLAUDE_CONFIG_DIR is already set in env, the shim passes through
-// without consulting state/active. This matches the shell hook's rule of
-// never overwriting a CCD the caller already set, and fixes the case where
-// `ccs run <profile>` execs a wrapper like `caffeinate claude` — the wrapper
-// resolves `claude` via PATH back to this shim, which would otherwise reset
-// CCD from state/active and undo what `ccs run` just configured.
+// without consulting state/active: the caller chose a config directory. This
+// also keeps `ccs <profile>` with a wrapping launch.command (e.g.
+// `caffeinate claude`) on that profile when the wrapper resolves `claude`
+// via PATH back to this shim.
 //
 // DisableFlagParsing is true because args after the target (e.g. --help,
 // --version) belong to the target command, not to ccs.
@@ -79,13 +78,6 @@ func newInternalShimExecCmd() *cobra.Command {
 			a, err := loadApp()
 			if err != nil {
 				return err
-			}
-			// CCS_MANAGED_CCD marks a CLAUDE_CONFIG_DIR exported by the shell
-			// hook of older ccs releases. It may be stale, so both are dropped
-			// and the active profile (or ~/.claude when none) applies.
-			if os.Getenv("CCS_MANAGED_CCD") != "" {
-				_ = os.Unsetenv("CLAUDE_CONFIG_DIR")
-				_ = os.Unsetenv("CCS_MANAGED_CCD")
 			}
 			if os.Getenv("CLAUDE_CONFIG_DIR") != "" {
 				return a.launch("", args)

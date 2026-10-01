@@ -312,11 +312,47 @@ func TestUnpackBackupRejectsEntriesBeneathSymlink(t *testing.T) {
 	}
 }
 
-func TestUnpackRejectsSymlinkEntries(t *testing.T) {
-	tarPath := filepath.Join(t.TempDir(), "link.tar.gz")
-	writeMaliciousArchive(t, tarPath, "manifest.json", Manifest{Profile: "work"},
-		tar.Header{Name: "profile/self", Typeflag: tar.TypeSymlink, Linkname: "."}, nil)
-	if _, err := Unpack(tarPath, t.TempDir()); err == nil {
-		t.Fatal("export archives never contain symlinks; Unpack should reject them")
+// A symlink chain can pass the per-link lexical check yet resolve outside the
+// destination; writes through it must still be refused.
+func TestUnpackRefusesWritesThroughEscapingSymlinkChain(t *testing.T) {
+	tarPath := filepath.Join(t.TempDir(), "chain.tar.gz")
+	f, err := os.Create(tarPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gz := gzip.NewWriter(f)
+	tw := tar.NewWriter(gz)
+	entries := []tar.Header{
+		{Name: "sub/q", Typeflag: tar.TypeSymlink, Linkname: "."},
+		{Name: "sub/p", Typeflag: tar.TypeSymlink, Linkname: "q/../.."},
+		{Name: "sub/p/escape.txt", Typeflag: tar.TypeReg, Mode: 0o644, Size: 5},
+	}
+	for _, h := range entries {
+		if err := tw.WriteHeader(&h); err != nil {
+			t.Fatal(err)
+		}
+		if h.Typeflag == tar.TypeReg {
+			if _, err := tw.Write([]byte("pwned")); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := writeTarBytes(tw, BackupManifestName, []byte(`{"type":"backup"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := errors.Join(tw.Close(), gz.Close(), f.Close()); err != nil {
+		t.Fatal(err)
+	}
+
+	parent := t.TempDir()
+	dst := filepath.Join(parent, "dest")
+	if err := os.Mkdir(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UnpackBackup(tarPath, dst); err == nil {
+		t.Fatal("expected write through escaping symlink chain to fail")
+	}
+	if _, err := os.Lstat(filepath.Join(parent, "escape.txt")); err == nil {
+		t.Error("file written outside dest through symlink chain")
 	}
 }

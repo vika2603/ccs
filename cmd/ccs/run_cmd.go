@@ -4,8 +4,6 @@ import (
 	"os"
 	"syscall"
 
-	"github.com/spf13/cobra"
-
 	"github.com/vika2603/ccs/internal/profileenv"
 )
 
@@ -55,27 +53,4 @@ func splitProfileArgs(args []string) (string, []string) {
 		rest = rest[1:]
 	}
 	return args[0], rest
-}
-
-func newRunCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:               "run [profile] [-- <cmd> [args...]]",
-		Short:             "Run a command with CLAUDE_CONFIG_DIR set (default profile: active, default cmd: claude)",
-		Args:              cobra.ArbitraryArgs,
-		ValidArgsFunction: completeProfileNamesAtArg0,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			a, err := loadApp()
-			if err != nil {
-				return err
-			}
-			name, rest := splitProfileArgs(args)
-			if name == "" {
-				// No explicit profile: use the active one if any, otherwise
-				// pass through. This lets the PATH shim call `ccs run -- claude`
-				// unconditionally.
-				name, _ = a.Active()
-			}
-			return a.launch(name, rest)
-		},
-	}
 }

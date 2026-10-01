@@ -94,13 +94,12 @@ func TestShimExecWithActiveProfileReachesResolve(t *testing.T) {
 	}
 }
 
-// TestShimExecHonorsExistingCCD guards the `ccs run <profile>` → shim loop:
-// when the outer ccs run already set CLAUDE_CONFIG_DIR (e.g., the user has a
-// launch wrapper like `caffeinate claude` that routes `claude` through the
-// PATH shim), __shim_exec must not re-derive CCD from state/active and
-// clobber it. We point state/active at a non-existent profile so that the
-// old behavior would surface as a profile-lookup error; the new behavior
-// passes through to binary resolution instead.
+// TestShimExecHonorsExistingCCD guards the `ccs <profile>` → shim loop: when
+// an outer ccs already set CLAUDE_CONFIG_DIR (e.g. a launch.command wrapper
+// like `caffeinate claude` routes `claude` through the PATH shim),
+// __shim_exec must not re-derive CCD from state/active. state/active points
+// at a missing profile, so consulting it would surface as a lookup error;
+// passing through reaches binary resolution instead.
 func TestShimExecHonorsExistingCCD(t *testing.T) {
 	home := t.TempDir()
 	if _, err := runCmd(t, home, "init"); err != nil {
@@ -110,7 +109,7 @@ func TestShimExecHonorsExistingCCD(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, ".ccs", "state", "active"), []byte("ghost\n"), 0o644); err != nil {
 		t.Fatalf("write active: %v", err)
 	}
-	// Simulate an outer `ccs run vika` having set CCD before the shim ran.
+	// Simulate an outer `ccs vika` having set CCD before the shim ran.
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".ccs", "profiles", "vika"))
 	_, err := runCmd(t, home, "__shim_exec", "ccs-nonexistent-binary-for-tests-zzz")
 	if err == nil {

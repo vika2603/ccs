@@ -129,7 +129,7 @@ func (o Ops) Relink(profile, field string) error {
 		}
 		return fmt.Errorf("%q is a symlink to %q, not the expected shared path %q; resolve manually", linkPath, target, sharedPath)
 	case err == nil:
-		return fmt.Errorf("%q already exists as a real copy; run `ccs share %s` first to push it into shared", linkPath, field)
+		return fmt.Errorf("%q already exists as a real copy; run `ccs field share %s` first to push it into shared", linkPath, field)
 	case errors.Is(err, os.ErrNotExist):
 	default:
 		return err

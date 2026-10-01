@@ -17,60 +17,46 @@ import (
 	"github.com/vika2603/ccs/internal/tui"
 )
 
-func newAdoptCmd() *cobra.Command {
-	var move bool
-	cmd := &cobra.Command{
-		Use:   "adopt <src-dir> <name>",
-		Short: "Adopt an existing .claude-style directory as a profile",
-		Args:  cobra.ExactArgs(2),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			src, name := args[0], args[1]
-			if err := layout.ValidName(name); err != nil {
-				return err
-			}
-			a, err := loadApp()
-			if err != nil {
-				return err
-			}
-
-			if _, err := os.Stat(src); err != nil {
-				return err
-			}
-			dst := a.ProfilePath(name)
-			if _, err := os.Stat(dst); err == nil {
-				return fmt.Errorf("profile %q already exists", name)
-			} else if !errors.Is(err, os.ErrNotExist) {
-				return err
-			}
-			if err := os.MkdirAll(dst, 0o755); err != nil {
-				return err
-			}
-
-			in := bufferedStdin(cmd.InOrStdin())
-			prompter := importPrompter{
-				out: cmd.OutOrStdout(),
-				in:  in,
-				err: cmd.ErrOrStderr(),
-			}
-			if err := fields.ImportEntries(src, dst, a.SharedDir(), a.reg, prompter, move); err != nil {
-				return err
-			}
-			// Link the shared fields the source lacked, as `ccs new` would.
-			for _, s := range a.reg.Shared() {
-				if _, err := os.Lstat(filepath.Join(dst, s.Name)); errors.Is(err, os.ErrNotExist) {
-					if err := a.ops().Relink(name, s.Name); err != nil {
-						return err
-					}
-				}
-			}
-			if err := maybeImportClaudeJSON(src, dst, name, in, cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
-				return err
-			}
-			return maybeImportCreds(src, dst, name, move, a.creds, in, cmd.OutOrStdout(), cmd.ErrOrStderr())
-		},
+// adopt turns the existing Claude Code directory src into profile name,
+// moving instead of copying when move is set.
+func (a app) adopt(cmd *cobra.Command, src, name string, move bool) error {
+	if err := layout.ValidName(name); err != nil {
+		return err
 	}
-	cmd.Flags().BoolVar(&move, "move", false, "move files instead of copying")
-	return cmd
+	if _, err := os.Stat(src); err != nil {
+		return err
+	}
+	dst := a.ProfilePath(name)
+	if _, err := os.Stat(dst); err == nil {
+		return fmt.Errorf("profile %q already exists", name)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return err
+	}
+
+	in := bufferedStdin(cmd.InOrStdin())
+	prompter := importPrompter{
+		out: cmd.OutOrStdout(),
+		in:  in,
+		err: cmd.ErrOrStderr(),
+	}
+	if err := fields.ImportEntries(src, dst, a.SharedDir(), a.reg, prompter, move); err != nil {
+		return err
+	}
+	// Link the shared fields the source lacked, as `ccs new` would.
+	for _, s := range a.reg.Shared() {
+		if _, err := os.Lstat(filepath.Join(dst, s.Name)); errors.Is(err, os.ErrNotExist) {
+			if err := a.ops().Relink(name, s.Name); err != nil {
+				return err
+			}
+		}
+	}
+	if err := maybeImportClaudeJSON(src, dst, name, in, cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
+		return err
+	}
+	return maybeImportCreds(src, dst, name, move, a.creds, in, cmd.OutOrStdout(), cmd.ErrOrStderr())
 }
 
 // maybeImportClaudeJSON handles the legacy default Claude Code layout where

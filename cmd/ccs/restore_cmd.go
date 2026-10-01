@@ -45,7 +45,7 @@ func newRestoreCmd() *cobra.Command {
 				return err
 			}
 			if m.Type != archive.BackupType {
-				return fmt.Errorf("archive is not a full backup (type=%q); use `ccs import` for single-profile archives", m.Type)
+				return fmt.Errorf("archive is not a ccs backup (type=%q)", m.Type)
 			}
 			if m.SourcePlatform != "" && m.SourcePlatform != restorePlatformOverride {
 				return fmt.Errorf("archive platform %q does not match current platform %q; cross-platform restore is not supported yet", m.SourcePlatform, restorePlatformOverride)

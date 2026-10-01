@@ -29,10 +29,10 @@ The bare `ccs` command and `ccs <profile>` both `syscall.Exec` into `claude` wit
 - `cmd/ccs` — cobra wiring only. `app.go` loads paths, config, registry, credential store, and profile manager once per command.
 - `internal/layout` — `~/.ccs` paths, profile name validation, and the flock-guarded active-profile pointer (`Paths.Active/SetActive/ClearActive`).
 - `internal/config` — `config.toml` load/save and shipped defaults.
-- `internal/fields` — field registry plus fork/share/relink/import logic. Has no UI dependency; callers pass a `ConflictFunc`.
+- `internal/fields` — field registry plus fork/share/relink/adopt logic. Has no UI dependency; callers pass a `ConflictFunc`.
 - `internal/profile` — profile create/remove/rename/clone, and the account label shown by `ls`/`status`.
 - `internal/creds` — per-platform credential store and keychain service enumeration.
-- `internal/archive` — export and backup tarballs; extraction goes through `os.Root`.
+- `internal/archive` — backup tarballs; extraction goes through `os.Root`.
 - `internal/doctor` — consistency checks; `ccs doctor --fix` repairs the findings with a safe remedy. Orphan keychain entries are never deleted automatically because a service name only carries a hash of its directory.
 - `internal/profileenv` — per-profile env files and the env/argv used to launch claude.
 - `internal/tui` — the share/adopt conflict prompt.
@@ -42,7 +42,7 @@ The bare `ccs` command and `ccs <profile>` both `syscall.Exec` into `claude` wit
 
 ```
 ~/.ccs/
-  config.toml          # shared/isolated classification + export excludes + launch.command
+  config.toml          # shared/isolated classification + backup excludes + launch.command
   state/active         # name of active profile (flock-guarded; see internal/layout/active.go)
   shared/<field>       # real files/dirs that profiles symlink to
   profiles/<name>/     # CLAUDE_CONFIG_DIR for that profile (mix of symlinks + real files)
@@ -58,61 +58,55 @@ The single most important concept. Every top-level entry under a profile directo
 
 - **Shared**: symlinked into `~/.ccs/shared/<field>`. Default: `skills`, `commands`, `agents`, `CLAUDE.md`, `settings.json`.
 - **Isolated**: real file/dir living inside the profile. Default includes `.claude.json` (holds account identity — `oauthAccount`, `userID`, onboarding flags), `.credentials.json` (Linux only), `plugins`, `history.jsonl`, `projects`, `sessions`, `todos`, `statsig`, etc.
-- **Excluded from export**: `cache`, `plugin`, `chrome`, `paste-cache`, `stats-cache.json`. Excluded names are also treated as isolated.
+- **Excluded from backup** (`[export] exclude`): `cache`, `plugin`, `chrome`, `paste-cache`, `stats-cache.json`. Excluded names are also treated as isolated.
 
-When adding or changing a default, update `internal/config/defaults.go` AND think about whether the entry is (a) safe to share across profiles and (b) regeneratable if excluded from export. `.claude.json` must stay Isolated — it pairs with the per-profile OAuth token in the credential store; sharing it would cross-contaminate identities.
+When adding or changing a default, update `internal/config/defaults.go` AND think about whether the entry is (a) safe to share across profiles and (b) regeneratable if excluded from backup. `.claude.json` must stay Isolated — it pairs with the per-profile OAuth token in the credential store; sharing it would cross-contaminate identities.
 
-Entries not in either list are treated as isolated at runtime but reported by `ccs doctor` as `unclassified-entry` and by `ccs classify <name> <shared|isolated>` to pin them.
+Entries not in either list are treated as isolated at runtime but reported by `ccs doctor` as `unclassified-entry` and pinned with `ccs field classify <name> <shared|isolated>`.
 
 Kind (file vs dir) is inferred from name (`kindOverrides` in `fields.go` handles dotfiles like `.credentials.json` that have no distinguishing extension).
 
 ## Fork / share / relink lifecycle (`internal/fields/ops.go`)
 
-- `ccs fork <field> [profile]` — replaces the profile's symlink with a real copy of `shared/<field>` so edits from this profile are local.
-- `ccs share <field> [profile]` — pushes the forked copy back into `shared/`, prompting the conflict prompt (`internal/tui`) if `shared/<field>` is non-empty, then re-creates the symlink. Besides `share`, `adopt`, `import`, and `restore` copy content into `shared/`; `init`, `new`, `clone`, and `doctor --fix` only create missing empty targets.
-- `ccs doctor --fix` — recreates missing symlinks to `shared/<field>` via `Ops.Relink`, which refuses to overwrite a real copy (must `share` first). Profiles with no shared link at all (`ccs new --blank`) are left alone.
+- `ccs field fork <field> [profile]` — replaces the profile's symlink with a real copy of `shared/<field>` so edits from this profile are local.
+- `ccs field share <field> [profile]` — pushes the forked copy back into `shared/`, prompting the conflict prompt (`internal/tui`) if `shared/<field>` is non-empty, then re-creates the symlink. Besides `share`, adopting (`new --from <dir>`) and `restore` copy content into `shared/`; `init`, `new`, and `doctor --fix` only create missing empty targets.
+- `ccs doctor --fix` — recreates missing symlinks to `shared/<field>` via `Ops.Relink`, which refuses to overwrite a real copy (must `field share` first). Profiles with no shared link at all (`ccs new --blank`) are left alone.
 - `ccs status` — reports each shared field as `linked | forked | missing`.
 
 ## Credentials (`internal/creds`)
 
 Storage is per-platform behind `Store`:
 
-- `keychain_darwin.go` — macOS Keychain via `security`, one service per profile, name derived in `service.go` as `Claude Code-credentials-<sha8(abs_profile_path)>`. The service name for `~/.claude` itself is the bare `Claude Code-credentials` (matches vanilla Claude Code so `adopt` can take it over in place).
+- `keychain_darwin.go` — macOS Keychain via `security`, one service per profile, name derived in `service.go` as `Claude Code-credentials-<sha8(abs_profile_path)>`. The service name for `~/.claude` itself is the bare `Claude Code-credentials` (matches vanilla Claude Code so `new --from ~/.claude` can take it over in place).
 - `file_linux.go` — `<profile>/.credentials.json`, mode 0600. This is why `.credentials.json` is Isolated in defaults.
 
 `creds.Migrate` (used by `ccs mv`) is write-new → verify-roundtrip → delete-old; if verification fails it keeps both rather than risk losing a token.
 
 ## Active profile, shim, and env vars (`cmd/ccs/shim_cmds.go`, `internal/profileenv`)
 
-`ccs init` writes `~/.ccs/bin/claude`, which calls the hidden `ccs __shim_exec`. The shim reads `state/active` on every start and execs claude with `CLAUDE_CONFIG_DIR` and the profile's env vars (`profileenv.BuildEnv`), so `ccs use` takes effect in every shell and GUI app without any shell integration. There is no shell hook; `shell-init` is hidden and only prints the completion script so existing `eval "$(ccs shell-init)"` lines keep working (in zsh it registers completion only if `compinit` already ran).
+`ccs init` writes `~/.ccs/bin/claude`, which calls the hidden `ccs __shim_exec`. The shim reads `state/active` on every start and execs claude with `CLAUDE_CONFIG_DIR` and the profile's env vars (`profileenv.BuildEnv`), so `ccs use` takes effect in every shell and GUI app without any shell integration. There is no shell integration besides `ccs completion <shell>`.
 
-If `CLAUDE_CONFIG_DIR` is already set and `CCS_MANAGED_CCD` is not, the shim passes the environment through unchanged, so `ccs run <profile> <wrapper>` is not undone when the wrapper resolves `claude` back to the shim. `CCS_MANAGED_CCD` marks a value exported by the shell hook of older releases; the shim unsets both variables before deciding, and `BuildEnv` drops the marker. A shell that still carries the marker cannot pass an explicit `CLAUDE_CONFIG_DIR` through the shim until it is restarted.
+If `CLAUDE_CONFIG_DIR` is already set, the shim passes the environment through unchanged. This keeps `ccs <profile>` with a wrapping `launch.command` (e.g. `["caffeinate", "-is", "claude"]`) on the chosen profile when the wrapper resolves `claude` back to the shim.
 
-`ccs env set/unset/ls/edit/get <profile>` writes `~/.ccs/env/<profile>.toml` (0600). Names must match `^[A-Za-z_][A-Za-z0-9_]*$`. Values are masked in `env ls` unless `--show-values`. Profile env vars never reach the user's shell.
+The root command is `ccs [profile] [-- claude-args]`. A leading `--` (`ccs -- -c`) names no profile and behaves like `claude -c` through the shim: an explicit `CLAUDE_CONFIG_DIR` wins, then the active profile, then plain claude (`cmd.ArgsLenAtDash() == 0` in `cmd/ccs/root.go`).
 
-## Adopt / export / import / backup / restore (`internal/archive`, `cmd/ccs/*_cmd.go`)
+`ccs env set/unset/ls/edit <profile>` writes `~/.ccs/env/<profile>.toml` (0600). Names must match `^[A-Za-z_][A-Za-z0-9_]*$`. Values are masked in `env ls` unless `--show-values`. Profile env vars never reach the user's shell.
 
-`ccs adopt <dir> <name>` turns an existing `.claude`-style directory into a profile and links every configured shared field, as `ccs new` does. `ccs export`/`ccs import` move a single profile; `ccs backup`/`ccs restore` move the whole `~/.ccs` tree.
+## Creating profiles, backup, restore (`cmd/ccs/profile_cmds.go`, `cmd/ccs/adopt_cmd.go`, `internal/archive`)
 
-The export archive is a gzipped tar with `manifest.json` at root:
+`ccs new <name>` creates an empty profile; `--from <profile>` clones one; `--from <dir>` adopts an existing `.claude`-style directory and links every configured shared field, as a plain `new` does. A `--from` value containing a path separator is always a directory; otherwise an existing profile of that name wins over a same-named directory.
 
-- `profile/<entry>` — resolved (symlinks dereferenced) copies of selected profile entries.
-- `shared/<field>` — for each selected shared entry that was still symlinked in the profile, the real content from `~/.ccs/shared/`.
-- `credentials.json.age` — only if `--with-credentials`; encrypted via `filippo.io/age` passphrase recipient (`internal/archive/age.go`).
+`ccs backup`/`ccs restore` move the whole `~/.ccs` tree. The backup archive uses `backup-manifest.json`, keeps symlinks into `~/.ccs` as relative links, and stores all profiles' tokens in one age-encrypted bundle. `cmd/ccs/backup_cmd.go` prints a scope-of-protection notice to stderr — **do not remove it**; the tarball is plaintext except for the encrypted tokens.
 
-Export modes are chosen in `fields.SelectExportMaterial`: default (shared entries), `--with-credentials` (adds `.claude.json` and the token), `--full` (adds isolated runtime data such as `projects`, `todos`, `history.jsonl`, plus `.claude.json`). Scope-of-protection notice is printed to stderr in `cmd/ccs/export_cmd.go` — **do not remove it**; the tarball itself and `manifest.json` are plaintext and only the OAuth token is encrypted.
+Extraction (`archive.extract`) treats archives as untrusted input: it rejects entry names outside the destination and any entry placed beneath a symlink, checks each symlink target from the directory it is created in, and writes through `os.Root`. `restore` validates the profile names in the credentials bundle before using them as paths.
 
-Only the entries the chosen mode selects are packed; there is no "whole directory" fallback. The backup archive uses `backup-manifest.json`, keeps symlinks into `~/.ccs` as relative links, and stores all profiles' tokens in one age-encrypted bundle.
-
-Extraction (`archive.extract`) treats archives as untrusted input: it rejects entry names outside the destination and any entry placed beneath a symlink, checks each symlink target from the directory it is created in, and writes through `os.Root`. Export archives must not contain symlinks at all, because `Pack` dereferences them. `import` validates the manifest profile name and `restore` validates the profile names in the credentials bundle before using them as paths.
-
-Import and restore refuse cross-platform archives (`m.SourcePlatform != runtime.GOOS`) because the credential store shape differs between macOS and Linux.
+Restore refuses cross-platform archives (`m.SourcePlatform != runtime.GOOS`) because the credential store shape differs between macOS and Linux.
 
 ## Command wiring
 
 All subcommands registered in `cmd/ccs/root.go`; each `new*Cmd()` lives in its own file. `loadApp()` in `cmd/ccs/app.go` is the only way commands obtain their dependencies: it embeds `layout.Paths` and carries the loaded config, field registry, credential store, and profile manager. Use `a.profileOrActive(name)` for "explicit profile or the active one" arguments.
 
-The hidden `__shim_exec` command is a contract with the shim script generated in `cmd/ccs/shim_cmds.go`; already-installed shims call it until the next `ccs init`, so keep its argument shape stable. The hidden `shell-init` exists only for old rc files.
+The hidden `__shim_exec` command is a contract with the shim script generated in `cmd/ccs/shim_cmds.go`; already-installed shims call it until the next `ccs init`, so keep its argument shape stable.
 
 ## Testing conventions
 

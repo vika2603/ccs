@@ -115,35 +115,3 @@ func moveOrCopy(src, dst string, move bool) error {
 	}
 	return fsutil.CopyTree(src, dst)
 }
-
-func SelectExportMaterial(profileDir string, reg *Registry, mode ExportMode) ([]Entry, error) {
-	dirEntries, err := os.ReadDir(profileDir)
-	if err != nil {
-		return nil, err
-	}
-	var out []Entry
-	for _, e := range dirEntries {
-		name := e.Name()
-		if name == ".credentials.json" || name == ".claude.json" {
-			continue
-		}
-		if reg.IsExcludedFromExport(name) {
-			continue
-		}
-		class := reg.Describe(name)
-		if class.Category == Isolated && mode != ExportFull {
-			continue
-		}
-		path := filepath.Join(profileDir, name)
-		kind, err := detectKind(path)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, Entry{
-			Name: name,
-			Path: path,
-			Kind: kind,
-		})
-	}
-	return out, nil
-}

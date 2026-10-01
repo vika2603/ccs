@@ -47,6 +47,15 @@ func argOrEmpty(args []string) string {
 	return args[0]
 }
 
+func newFieldCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "field",
+		Short: "Fork, share, or classify the fields of a profile directory",
+	}
+	cmd.AddCommand(newForkCmd(), newShareCmd(), newClassifyCmd())
+	return cmd
+}
+
 func newForkCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:               "fork <field> [<profile>]",
@@ -100,7 +109,7 @@ func newShareCmd() *cobra.Command {
 func newStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:               "status [<profile>]",
-		Short:             "Report per-field link state and summarize shared/",
+		Short:             "Show a profile's account, path, and shared field state",
 		Args:              cobra.RangeArgs(0, 1),
 		ValidArgsFunction: completeProfileNamesAtArg0,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -121,6 +130,7 @@ func newStatusCmd() *cobra.Command {
 			} else {
 				cmd.Printf("profile %s\n", profile)
 			}
+			cmd.Printf("path %s\n", a.ProfilePath(profile))
 			for _, field := range slices.Sorted(maps.Keys(st)) {
 				cmd.Printf("  %s\t%s\n", field, describeLinkState(st[field]))
 			}

@@ -11,7 +11,7 @@ import (
 func TestClassifyAppendsToCategory(t *testing.T) {
 	home := t.TempDir()
 	runCmd(t, home, "init")
-	if _, err := runCmd(t, home, "classify", "plans", "isolated"); err != nil {
+	if _, err := runCmd(t, home, "field", "classify", "plans", "isolated"); err != nil {
 		t.Fatalf("classify: %v", err)
 	}
 	cfg, err := config.Load(filepath.Join(home, ".ccs", "config.toml"))
@@ -32,7 +32,7 @@ func TestClassifyAppendsToCategory(t *testing.T) {
 func TestClassifyRejectsDuplicate(t *testing.T) {
 	home := t.TempDir()
 	runCmd(t, home, "init")
-	_, err := runCmd(t, home, "classify", "skills", "shared")
+	_, err := runCmd(t, home, "field", "classify", "skills", "shared")
 	if err == nil {
 		t.Fatalf("expected error on duplicate classification")
 	}
@@ -44,7 +44,7 @@ func TestClassifyRejectsDuplicate(t *testing.T) {
 func TestClassifyRejectsInvalidCategory(t *testing.T) {
 	home := t.TempDir()
 	runCmd(t, home, "init")
-	_, err := runCmd(t, home, "classify", "something", "bogus")
+	_, err := runCmd(t, home, "field", "classify", "something", "bogus")
 	if err == nil {
 		t.Fatalf("expected error for invalid category")
 	}

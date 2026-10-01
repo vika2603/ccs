@@ -19,11 +19,9 @@ func newEnvCmd() *cobra.Command {
 	}
 	cmd.AddCommand(
 		newEnvLsCmd(),
-		newEnvGetCmd(),
 		newEnvSetCmd(),
 		newEnvUnsetCmd(),
 		newEnvEditCmd(),
-		newEnvPathCmd(),
 	)
 	return cmd
 }
@@ -71,32 +69,6 @@ func newEnvLsCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&showValues, "show-values", false, "print full values (sensitive!)")
-	return cmd
-}
-
-func newEnvGetCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:               "get <profile> <KEY>",
-		Short:             "Print a single env var's value (plaintext)",
-		Args:              cobra.ExactArgs(2),
-		ValidArgsFunction: completeProfileNamesAtArg0,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			a, err := loadApp()
-			if err != nil {
-				return err
-			}
-			f, err := profileenv.Load(a.EnvFile(args[0]))
-			if err != nil {
-				return err
-			}
-			v, ok := f.Env[args[1]]
-			if !ok {
-				return fmt.Errorf("%q is not set in profile %q", args[1], args[0])
-			}
-			cmd.Println(v)
-			return nil
-		},
-	}
 	return cmd
 }
 
@@ -222,28 +194,6 @@ func newEnvEditCmd() *cobra.Command {
 				}
 				return fmt.Errorf("edited file is invalid (restored previous contents): %w", err)
 			}
-			return nil
-		},
-	}
-	return cmd
-}
-
-func newEnvPathCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:               "path [profile]",
-		Short:             "Print the env file path for a profile (default: active)",
-		Args:              cobra.MaximumNArgs(1),
-		ValidArgsFunction: completeProfileNamesAtArg0,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			a, err := loadApp()
-			if err != nil {
-				return err
-			}
-			name, err := a.profileOrActive(argOrEmpty(args))
-			if err != nil {
-				return err
-			}
-			cmd.Println(a.EnvFile(name))
 			return nil
 		},
 	}

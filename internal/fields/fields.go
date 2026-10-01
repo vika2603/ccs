@@ -2,7 +2,6 @@ package fields
 
 import (
 	"maps"
-	"os"
 	"path/filepath"
 
 	"github.com/vika2603/ccs/internal/config"
@@ -46,24 +45,9 @@ type Classification struct {
 	Kind     Kind
 }
 
-type ExportMode int
-
-const (
-	ExportDefault ExportMode = iota
-	ExportWithCredentials
-	ExportFull
-)
-
-type Entry struct {
-	Name string
-	Path string
-	Kind Kind
-}
-
 type Registry struct {
 	shared     map[string]Classification
 	isolated   map[string]Classification
-	excluded   map[string]struct{}
 	known      map[string]Classification
 	sharedList []Classification
 }
@@ -72,11 +56,9 @@ func NewRegistry(cfg config.Config) *Registry {
 	r := &Registry{
 		shared:   set(cfg.Shared, Shared),
 		isolated: set(cfg.Isolated, Isolated),
-		excluded: make(map[string]struct{}, len(cfg.Export.Exclude)),
 		known:    map[string]Classification{},
 	}
 	for _, name := range cfg.Export.Exclude {
-		r.excluded[name] = struct{}{}
 		if _, ok := r.shared[name]; ok {
 			continue
 		}
@@ -124,31 +106,6 @@ func inferKind(name string) Kind {
 	return KindDir
 }
 
-func detectKind(path string) (Kind, error) {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return KindDir, err
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		target, err := filepath.EvalSymlinks(path)
-		if err != nil {
-			return KindDir, err
-		}
-		ti, err := os.Stat(target)
-		if err != nil {
-			return KindDir, err
-		}
-		if ti.IsDir() {
-			return KindDir, nil
-		}
-		return KindFile, nil
-	}
-	if info.IsDir() {
-		return KindDir, nil
-	}
-	return KindFile, nil
-}
-
 func (r *Registry) Describe(name string) Classification {
 	if class, ok := r.shared[name]; ok {
 		return class
@@ -166,11 +123,6 @@ func (r *Registry) Classify(name string) Category {
 func (r *Registry) IsUnknown(name string) bool {
 	_, ok := r.known[name]
 	return !ok
-}
-
-func (r *Registry) IsExcludedFromExport(name string) bool {
-	_, ok := r.excluded[name]
-	return ok
 }
 
 func (r *Registry) Shared() []Classification {

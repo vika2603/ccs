@@ -29,7 +29,7 @@ func TestForkAndStatus(t *testing.T) {
 	runCmd(t, home, "init")
 	runCmd(t, home, "new", "work")
 	os.WriteFile(filepath.Join(home, ".ccs", "shared", "skills", "a.md"), []byte("A"), 0o644)
-	if _, err := runCmd(t, home, "fork", "skills", "work"); err != nil {
+	if _, err := runCmd(t, home, "field", "fork", "skills", "work"); err != nil {
 		t.Fatalf("fork: %v", err)
 	}
 	out, _ := runCmd(t, home, "status", "work")
@@ -53,7 +53,7 @@ func TestShareConflictPrompts(t *testing.T) {
 	os.WriteFile(filepath.Join(home, ".ccs", "profiles", "work", "skills", "local.md"), []byte("L"), 0o644)
 	os.WriteFile(filepath.Join(home, ".ccs", "shared", "skills", "shared.md"), []byte("S"), 0o644)
 
-	out, err := runCmdWithInput(t, home, "o\n", "share", "skills", "work")
+	out, err := runCmdWithInput(t, home, "o\n", "field", "share", "skills", "work")
 	if err != nil {
 		t.Fatalf("share: %v", err)
 	}
