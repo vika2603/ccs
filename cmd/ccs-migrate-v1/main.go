@@ -1,13 +1,14 @@
 // Command ccs-migrate-v1 converts a ~/.ccs tree from the classification-based
 // layout (config.toml, shared/, profiles/<name>/, env/) to profile files on
-// top of ~/.claude. It is a one-off tool: run it once with every ccs-managed
-// claude session closed, then remove it.
+// top of ~/.claude. It is a one-off tool.
 //
-// Every old profile directory becomes a login profile in accounts/<name>, so
-// its history, projects, and login are kept; its stored keychain login moves
-// with it. Shared assets from ~/.ccs/shared that ~/.claude lacks are copied
-// into it; existing ~/.claude entries are never replaced. ~/.ccs is copied to
-// a backup directory first.
+// Every old profile directory is copied to accounts/<name> as a login
+// profile, so its history, projects, and login carry over; its stored
+// keychain login is copied too. Shared assets from ~/.ccs/shared that
+// ~/.claude lacks are copied into it; existing ~/.claude entries are never
+// replaced. The old tree is left in place and ignored by the new ccs, so
+// sessions still running on it keep working; delete it once the new layout
+// works.
 package main
 
 import (
@@ -23,7 +24,6 @@ import (
 	"reflect"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/BurntSushi/toml"
 
@@ -58,9 +58,6 @@ type step struct {
 func migrate(home string, dryRun bool, store creds.Store) error {
 	p := layout.New(home)
 	root := p.Root()
-	if os.Getenv("CLAUDE_CONFIG_DIR") != "" {
-		return errors.New("CLAUDE_CONFIG_DIR is set, so a ccs-managed claude may be running here; close it and run from a plain shell")
-	}
 	var cfg oldConfig
 	if _, err := toml.DecodeFile(filepath.Join(root, "config.toml"), &cfg); err != nil {
 		return fmt.Errorf("read old config.toml (is this an old ccs tree?): %w", err)
@@ -69,17 +66,9 @@ func migrate(home string, dryRun bool, store creds.Store) error {
 		return fmt.Errorf("%s already exists; the tree looks migrated", p.AccountsDir())
 	}
 
-	backup := filepath.Join(home, ".ccs-v1-backup-"+time.Now().Format("20060102-150405"))
 	var steps []step
 	add := func(desc string, run func() error) { steps = append(steps, step{desc, run}) }
 	var notes []string
-
-	add("back up "+root+" to "+backup+"/ccs", func() error {
-		if err := os.MkdirAll(backup, 0o700); err != nil {
-			return err
-		}
-		return copyPreserving(root, filepath.Join(backup, "ccs"))
-	})
 
 	oldShared := filepath.Join(root, "shared")
 	for _, name := range cfg.Shared {
@@ -92,7 +81,7 @@ func migrate(home string, dryRun bool, store creds.Store) error {
 			return err
 		}
 		for _, d := range differ {
-			notes = append(notes, d+" differs from ~/.ccs/shared and is kept as is; the shared version is in the backup")
+			notes = append(notes, d+" differs from ~/.ccs/shared and is kept as is")
 		}
 		for _, a := range added {
 			add("copy ~/.ccs/shared/"+strings.TrimPrefix(a.rel, "~/.claude/")+" to "+a.rel, func() error {
@@ -106,7 +95,7 @@ func migrate(home string, dryRun bool, store creds.Store) error {
 	if entries, err := os.ReadDir(oldShared); err == nil {
 		for _, e := range entries {
 			if !slices.Contains(cfg.Shared, e.Name()) {
-				notes = append(notes, "~/.ccs/shared/"+e.Name()+" is not in the old shared list and is only kept in the backup")
+				notes = append(notes, "~/.ccs/shared/"+e.Name()+" is not in the old shared list and is not copied")
 			}
 		}
 	}
@@ -137,14 +126,14 @@ func migrate(home string, dryRun bool, store creds.Store) error {
 			notes = append(notes, note)
 		}
 
-		add(fmt.Sprintf("move profile %s to %s and move its stored login", name, acct), func() error {
+		add(fmt.Sprintf("copy profile %s to %s with its stored login", name, acct), func() error {
 			if err := os.MkdirAll(p.AccountsDir(), 0o700); err != nil {
 				return err
 			}
-			if err := os.Rename(oldDir, acct); err != nil {
+			if err := copyPreserving(oldDir, acct); err != nil {
 				return err
 			}
-			return creds.Migrate(store, oldDir, acct, p.ClaudeDir())
+			return copyLogin(store, oldDir, acct)
 		})
 		add("drop "+name+"'s links into ~/.ccs/shared (relinked to ~/.claude on next launch)", func() error {
 			return dropSharedLinks(acct, oldShared, name, isolateSettings)
@@ -153,15 +142,6 @@ func migrate(home string, dryRun bool, store creds.Store) error {
 			return writeProfile(p, name, settings, isolateSettings)
 		})
 	}
-
-	add("remove old config.toml, shared/, and env/ (kept in the backup)", func() error {
-		for _, rel := range []string{"config.toml", "shared", "env"} {
-			if err := os.RemoveAll(filepath.Join(root, rel)); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
 
 	for i, s := range steps {
 		fmt.Printf("%2d. %s\n", i+1, s.desc)
@@ -175,11 +155,17 @@ func migrate(home string, dryRun bool, store creds.Store) error {
 	}
 	for i, s := range steps {
 		if err := s.run(); err != nil {
-			return fmt.Errorf("step %d (%s): %w; backup is at %s", i+1, s.desc, err, backup)
+			return fmt.Errorf("step %d (%s): %w", i+1, s.desc, err)
 		}
 	}
-	fmt.Println("done; backup is at", backup)
-	fmt.Println("next: install the new ccs and run `ccs init`, then `ccs ls`")
+	fmt.Println("done; the old tree is untouched. Once the new layout works, remove it with:")
+	old := []string{filepath.Join(root, "config.toml"), oldShared, filepath.Join(root, "env")}
+	for _, e := range entries {
+		if e.IsDir() {
+			old = append(old, filepath.Join(oldProfiles, e.Name()))
+		}
+	}
+	fmt.Println("  rm -rf " + strings.Join(old, " "))
 	return nil
 }
 
@@ -305,6 +291,25 @@ func writeProfile(p layout.Paths, name string, settings map[string]any, isolateS
 		return fmt.Errorf("generated profile is invalid: %w", err)
 	}
 	return fsutil.WriteFileAtomic(p.ProfileFile(name), []byte(b.String()), 0o600)
+}
+
+// copyLogin copies the stored login of oldDir to newDir and keeps the old
+// one, so a session still running on oldDir stays logged in.
+func copyLogin(s creds.Store, oldDir, newDir string) error {
+	data, err := s.Read(oldDir)
+	if errors.Is(err, creds.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := s.Write(newDir, data); err != nil {
+		return err
+	}
+	if got, err := s.Read(newDir); err != nil || !bytes.Equal(got, data) {
+		return fmt.Errorf("stored login for %s did not read back intact", newDir)
+	}
+	return nil
 }
 
 type copyOp struct{ src, dst, rel string }

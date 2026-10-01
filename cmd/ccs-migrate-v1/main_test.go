@@ -40,7 +40,6 @@ func link(t *testing.T, target, path string) {
 }
 
 func TestMigrate(t *testing.T) {
-	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	home := t.TempDir()
 	root := filepath.Join(home, ".ccs")
 	shared := filepath.Join(root, "shared")
@@ -70,18 +69,18 @@ shared = ["skills", "rules", "CLAUDE.md", "settings.json"]
 	write(t, filepath.Join(keep, "settings.json"), `{"model":"opus","permissions":{"allow":["x"]}}`)
 	link(t, filepath.Join(shared, "settings.json"), filepath.Join(root, "profiles", "keep", "CLAUDE.md"))
 
+	p := layout.New(home)
 	store := memStore{gw: []byte("token")}
 	if err := migrate(home, true, store); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(gw); err != nil {
+	if _, err := os.Stat(p.AccountsDir()); !os.IsNotExist(err) {
 		t.Fatalf("dry run changed the tree: %v", err)
 	}
 	if err := migrate(home, false, store); err != nil {
 		t.Fatal(err)
 	}
 
-	p := layout.New(home)
 	read := func(path string) string {
 		t.Helper()
 		b, err := os.ReadFile(path)
@@ -105,15 +104,15 @@ shared = ["skills", "rules", "CLAUDE.md", "settings.json"]
 
 	acct := p.AccountDir("gw")
 	if got := read(filepath.Join(acct, "history.jsonl")); got != "h" {
-		t.Errorf("history not moved: %q", got)
+		t.Errorf("history not copied: %q", got)
 	}
 	for _, name := range []string{"skills", "settings.json"} {
 		if _, err := os.Lstat(filepath.Join(acct, name)); !os.IsNotExist(err) {
 			t.Errorf("%s should be removed from the account dir: %v", name, err)
 		}
 	}
-	if store[acct] == nil || store[gw] != nil {
-		t.Errorf("login not moved: %v", store)
+	if string(store[acct]) != "token" || string(store[gw]) != "token" {
+		t.Errorf("login should be copied and kept: %v", store)
 	}
 	pr, err := profile.Load(p, "gw")
 	if err != nil {
@@ -135,20 +134,19 @@ shared = ["skills", "rules", "CLAUDE.md", "settings.json"]
 		t.Error("keep's settings.json should stay in its account dir")
 	}
 
-	for _, rel := range []string{"config.toml", "shared", "env"} {
-		if _, err := os.Stat(filepath.Join(root, rel)); !os.IsNotExist(err) {
-			t.Errorf("%s should be removed: %v", rel, err)
+	for _, path := range []string{filepath.Join(gw, "skills"), filepath.Join(gw, "settings.json"), filepath.Join(root, "env", "gw.toml")} {
+		if _, err := os.Lstat(path); err != nil {
+			t.Errorf("old tree should be untouched: %v", err)
 		}
+	}
+	if names, _ := profile.List(p); strings.Join(names, ",") != "gw,keep" {
+		t.Errorf("old profile dirs should be ignored by List: %v", names)
 	}
 	if name, _ := p.Active(); name != "gw" {
 		t.Errorf("active profile lost: %q", name)
 	}
 	if err := profile.Sync(p, pr); err != nil {
 		t.Errorf("sync after migration: %v", err)
-	}
-	backups, _ := filepath.Glob(filepath.Join(home, ".ccs-v1-backup-*", "ccs", "shared", "CLAUDE.md"))
-	if len(backups) != 1 || read(backups[0]) != "old" {
-		t.Errorf("backup missing the shared CLAUDE.md: %v", backups)
 	}
 	if err := migrate(home, true, store); err == nil {
 		t.Error("a migrated tree should be refused")
