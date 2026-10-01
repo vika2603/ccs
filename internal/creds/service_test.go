@@ -5,48 +5,28 @@ import (
 	"testing"
 )
 
-func TestServiceNameDefaultPathUsesBareServiceName(t *testing.T) {
-	defaultPath := filepath.Clean("/Users/a/.claude")
-	got, err := ServiceName(defaultPath, defaultPath)
+// The expected value is the service Claude Code itself uses for this
+// CLAUDE_CONFIG_DIR, so a change in hashing would orphan stored logins.
+func TestServiceNameMatchesClaudeCode(t *testing.T) {
+	got, err := serviceName("/Users/a/.ccs/accounts/work")
 	if err != nil {
-		t.Fatalf("ServiceName: %v", err)
+		t.Fatal(err)
 	}
-	if got != "Claude Code-credentials" {
-		t.Fatalf("got %q", got)
+	// printf %s /Users/a/.ccs/accounts/work | shasum -a 256 | cut -c1-8
+	if want := "Claude Code-credentials-da61693a"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
 	}
 }
 
-func TestServiceNameNamedProfileUsesSuffix(t *testing.T) {
-	defaultPath := filepath.Clean("/Users/a/.claude")
-	got, err := ServiceName("/Users/a/.ccs/profiles/work", defaultPath)
-	if err != nil {
-		t.Fatalf("ServiceName: %v", err)
-	}
-	want := "Claude Code-credentials-" + sha8("/Users/a/.ccs/profiles/work")
-	if got != want {
-		t.Fatalf("got %q want %q", got, want)
-	}
-}
-
-func TestServiceNameCanonicalizesRelativeInput(t *testing.T) {
-	home := t.TempDir()
-	defaultPath := filepath.Join(home, ".claude")
-	in := filepath.Join(home, ".ccs", "profiles", "..", "profiles", "work")
-	got, err := ServiceName(in, defaultPath)
-	if err != nil {
-		t.Fatalf("ServiceName: %v", err)
-	}
-	want := "Claude Code-credentials-" + sha8(filepath.Join(home, ".ccs", "profiles", "work"))
-	if got != want {
-		t.Fatalf("got %q want %q", got, want)
-	}
-}
-
-func TestServiceNameTrailingSlashHashesLikeCleanPath(t *testing.T) {
-	defaultPath := filepath.Clean("/Users/a/.claude")
-	a, _ := ServiceName("/Users/a/.ccs/profiles/work", defaultPath)
-	b, _ := ServiceName("/Users/a/.ccs/profiles/work/", defaultPath)
+func TestServiceNameCleansPath(t *testing.T) {
+	a, _ := serviceName("/Users/a/.ccs/accounts/work")
+	b, _ := serviceName("/Users/a/.ccs/accounts/../accounts/work/")
 	if a != b {
-		t.Fatalf("expected same service name, got %q and %q", a, b)
+		t.Fatalf("%q != %q", a, b)
+	}
+	rel, _ := serviceName(filepath.Join(".", "x"))
+	abs, _ := filepath.Abs("x")
+	if want, _ := serviceName(abs); rel != want {
+		t.Fatalf("relative path not made absolute: %q != %q", rel, want)
 	}
 }

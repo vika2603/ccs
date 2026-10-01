@@ -158,10 +158,11 @@ func (pr Profile) ConfigDir(p layout.Paths) string {
 }
 
 // Sync brings a login profile's directory in line with ~/.claude: every
-// ~/.claude entry missing from it is linked, and isolated entries that are
-// still links are replaced by a copy. Real files and directories already in
-// the account directory are never touched, so nothing the account wrote is
-// lost; to share such an entry again, delete it from the account directory.
+// ~/.claude entry missing from it is linked, isolated entries that are still
+// links are replaced by a copy, and links to entries removed from ~/.claude
+// are dropped. Real files and directories already in the account directory
+// are never touched, so nothing the account wrote is lost; to share such an
+// entry again, delete it from the account directory.
 func Sync(p layout.Paths, pr Profile) error {
 	if !pr.Login {
 		return nil
@@ -209,6 +210,31 @@ func Sync(p layout.Paths, pr Profile) error {
 			}
 		case !exists:
 			if err := os.Symlink(src, dst); err != nil {
+				return err
+			}
+		}
+	}
+	return pruneLinks(accountDir, p.ClaudeDir())
+}
+
+// pruneLinks removes links in accountDir that point to a missing entry of
+// claudeDir. Other links are the user's and are left alone.
+func pruneLinks(accountDir, claudeDir string) error {
+	entries, err := os.ReadDir(accountDir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.Type()&os.ModeSymlink == 0 {
+			continue
+		}
+		dst := filepath.Join(accountDir, e.Name())
+		target, err := os.Readlink(dst)
+		if err != nil || target != filepath.Join(claudeDir, e.Name()) {
+			continue
+		}
+		if _, err := os.Lstat(target); errors.Is(err, os.ErrNotExist) {
+			if err := os.Remove(dst); err != nil {
 				return err
 			}
 		}

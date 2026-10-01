@@ -218,7 +218,7 @@ func newRmCmd() *cobra.Command {
 					return errors.New("aborted")
 				}
 			}
-			if err := profile.Remove(p, name, creds.New().Delete); err != nil {
+			if err := profile.Remove(p, name, creds.Delete); err != nil {
 				return err
 			}
 			if active, _ := p.Active(); active == name {
@@ -243,7 +243,7 @@ func installShim(p layout.Paths) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	shim := p.ShimPath("claude")
+	shim := p.ShimPath()
 	// Replace a symlink at the shim path itself; writing through it would
 	// overwrite whatever it points to, possibly the real claude binary.
 	if info, err := os.Lstat(shim); err == nil && info.Mode()&os.ModeSymlink != 0 {

@@ -3,7 +3,6 @@
 package launch
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,58 +25,24 @@ func Env(env []string, configDir string) []string {
 	return out
 }
 
-// ResolveSkipping resolves argv[0] like exec.LookPath but ignores any $PATH
-// entries whose absolute form matches one of skipDirs. Used to keep ccs from
-// picking up its own shim at ~/.ccs/bin/claude when resolving "claude".
-//
-// If argv[0] contains a slash, it's returned as-is (matching exec.LookPath's
-// behavior for explicit paths). If skipDirs is empty, falls back to
-// exec.LookPath so callers don't pay for manual PATH walking.
-func ResolveSkipping(argv []string, skipDirs []string) (string, error) {
-	if len(argv) == 0 {
-		return "", fmt.Errorf("run: no command given")
-	}
-	name := argv[0]
-	if strings.ContainsRune(name, '/') {
-		return name, nil
-	}
-	if len(skipDirs) == 0 {
-		return exec.LookPath(name)
-	}
-	skip := make(map[string]struct{}, len(skipDirs))
-	for _, d := range skipDirs {
-		abs, err := filepath.Abs(d)
-		if err != nil {
-			continue
-		}
-		skip[abs] = struct{}{}
+// Resolve looks up name in $PATH like exec.LookPath, skipping skipDir so that
+// resolving "claude" never finds the ccs shim in ~/.ccs/bin.
+func Resolve(name, skipDir string) (string, error) {
+	skip, err := filepath.Abs(skipDir)
+	if err != nil {
+		return "", err
 	}
 	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
 		if dir == "" {
 			dir = "."
 		}
-		abs, err := filepath.Abs(dir)
-		if err != nil {
-			continue
-		}
-		if _, ok := skip[abs]; ok {
+		if abs, err := filepath.Abs(dir); err != nil || abs == skip {
 			continue
 		}
 		candidate := filepath.Join(dir, name)
-		if isExecutable(candidate) {
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() && info.Mode().Perm()&0o111 != 0 {
 			return candidate, nil
 		}
 	}
 	return "", &exec.Error{Name: name, Err: exec.ErrNotFound}
-}
-
-func isExecutable(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil {
-		return false
-	}
-	if info.IsDir() {
-		return false
-	}
-	return info.Mode().Perm()&0o111 != 0
 }

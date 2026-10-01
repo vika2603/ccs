@@ -20,8 +20,7 @@ func FromEnv() (Paths, error) {
 }
 
 func (p Paths) Root() string        { return filepath.Join(p.home, ".ccs") }
-func (p Paths) StateDir() string    { return filepath.Join(p.Root(), "state") }
-func (p Paths) ActiveFile() string  { return filepath.Join(p.StateDir(), "active") }
+func (p Paths) ActiveFile() string  { return filepath.Join(p.Root(), "state", "active") }
 func (p Paths) ProfilesDir() string { return filepath.Join(p.Root(), "profiles") }
 func (p Paths) AccountsDir() string { return filepath.Join(p.Root(), "accounts") }
 func (p Paths) RunDir() string      { return filepath.Join(p.Root(), "run") }
@@ -43,9 +42,8 @@ func (p Paths) SettingsFile(name string) string {
 	return filepath.Join(p.RunDir(), name+".settings.json")
 }
 
-func (p Paths) ShimPath(name string) string {
-	return filepath.Join(p.BinDir(), name)
-}
+// ShimPath is the claude shim written by `ccs init`.
+func (p Paths) ShimPath() string { return filepath.Join(p.BinDir(), "claude") }
 
 // ClaudeDir is the config directory Claude Code uses without
 // CLAUDE_CONFIG_DIR; it is the default profile and the source every other

@@ -102,7 +102,7 @@ func runShim(p layout.Paths, args []string) error {
 }
 
 func execClaude(p layout.Paths, argv, env []string) error {
-	bin, err := launch.ResolveSkipping(argv, []string{p.BinDir()})
+	bin, err := launch.Resolve(argv[0], p.BinDir())
 	if err != nil {
 		return err
 	}

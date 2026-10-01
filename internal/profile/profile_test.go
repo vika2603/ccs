@@ -124,6 +124,25 @@ func TestSyncLinksSharesAndIsolates(t *testing.T) {
 	if _, err := os.Readlink(filepath.Join(acct, "rules")); err != nil {
 		t.Errorf("new ~/.claude entry should be linked: %v", err)
 	}
+
+	// Links to entries removed from ~/.claude are dropped; the user's own
+	// links are kept even when dangling.
+	if err := os.RemoveAll(filepath.Join(claude, "rules")); err != nil {
+		t.Fatal(err)
+	}
+	own := filepath.Join(acct, "own-link")
+	if err := os.Symlink(filepath.Join(t.TempDir(), "gone"), own); err != nil {
+		t.Fatal(err)
+	}
+	if err := Sync(p, pr); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(acct, "rules")); !os.IsNotExist(err) {
+		t.Errorf("link to a removed ~/.claude entry should be dropped: %v", err)
+	}
+	if _, err := os.Lstat(own); err != nil {
+		t.Errorf("the user's own link must be kept: %v", err)
+	}
 }
 
 func TestWriteSettingsIsPrivateAndRemovedWhenEmpty(t *testing.T) {
@@ -175,15 +194,17 @@ func TestAccount(t *testing.T) {
 	p := layout.New(t.TempDir())
 	writeFile(t, p.ClaudeJSON(), `{"oauthAccount":{"emailAddress":"me@x.com","organizationName":"me@x.com's Organization"}}`)
 	writeFile(t, filepath.Join(p.AccountDir("work"), ".claude.json"), `{"oauthAccount":{"emailAddress":"w@x.com","organizationName":"Acme"}}`)
+	writeFile(t, filepath.Join(p.AccountDir("own"), "settings.json"), `{"env":{"ANTHROPIC_BASE_URL":"https://own.example.com"}}`)
 
 	cases := map[string]struct {
 		pr   Profile
 		want string
 	}{
-		"default":  {Profile{Name: "default"}, "me@x.com"},
-		"login":    {Profile{Name: "work", Login: true}, "w@x.com (Acme)"},
-		"gateway":  {Profile{Name: "gw", Settings: map[string]any{"env": map[string]any{"ANTHROPIC_BASE_URL": "https://gw.example.com/v1"}}}, "api: gw.example.com"},
-		"no login": {Profile{Name: "fresh", Login: true}, ""},
+		"default":           {Profile{Name: "default"}, "me@x.com"},
+		"login":             {Profile{Name: "work", Login: true}, "w@x.com (Acme)"},
+		"gateway":           {Profile{Name: "gw", Settings: map[string]any{"env": map[string]any{"ANTHROPIC_BASE_URL": "https://gw.example.com/v1"}}}, "api: gw.example.com"},
+		"no login":          {Profile{Name: "fresh", Login: true}, ""},
+		"own settings.json": {Profile{Name: "own", Login: true}, "api: own.example.com"},
 	}
 	for name, tc := range cases {
 		if got := Account(p, tc.pr); got != tc.want {

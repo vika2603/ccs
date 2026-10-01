@@ -10,19 +10,25 @@ import (
 )
 
 // Account describes what pr talks to, for display only: "api: <host>" when
-// its settings (or, for profiles without their own settings,
-// ~/.claude/settings.json) set ANTHROPIC_BASE_URL, otherwise the OAuth
+// its [settings] or the settings.json it runs with set ANTHROPIC_BASE_URL,
+// otherwise the OAuth
 // account recorded in the profile's global state. It returns "" when neither
 // is known. Tokens are never read.
 func Account(p layout.Paths, pr Profile) string {
 	if host := baseURLHost(pr.Settings); host != "" {
 		return "api: " + host
 	}
-	var shared struct {
-		Env map[string]any `json:"env"`
+	// A login profile may keep its own settings.json (isolate); otherwise it
+	// is a link to ~/.claude/settings.json or not created yet.
+	settingsPath := filepath.Join(p.ClaudeDir(), "settings.json")
+	if dir := pr.ConfigDir(p); dir != "" {
+		if _, err := os.Stat(filepath.Join(dir, "settings.json")); err == nil {
+			settingsPath = filepath.Join(dir, "settings.json")
+		}
 	}
-	if readJSON(filepath.Join(p.ClaudeDir(), "settings.json"), &shared) == nil {
-		if host := baseURLHost(map[string]any{"env": shared.Env}); host != "" {
+	var fileSettings map[string]any
+	if readJSON(settingsPath, &fileSettings) == nil {
+		if host := baseURLHost(fileSettings); host != "" {
 			return "api: " + host
 		}
 	}

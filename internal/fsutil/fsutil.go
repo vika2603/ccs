@@ -1,5 +1,4 @@
-// Package fsutil holds the file copy and write helpers shared by the profile,
-// field, and archive code paths.
+// Package fsutil holds file copy and atomic write helpers.
 package fsutil
 
 import (
@@ -18,7 +17,7 @@ func CopyTree(src, dst string) error {
 		return err
 	}
 	if !info.IsDir() {
-		return CopyFile(src, dst, info.Mode().Perm())
+		return copyFile(src, dst, info.Mode().Perm())
 	}
 	if err := os.MkdirAll(dst, info.Mode().Perm()); err != nil {
 		return err
@@ -35,9 +34,9 @@ func CopyTree(src, dst string) error {
 	return nil
 }
 
-// CopyFile copies the contents of the regular file src to dst, creating or
+// copyFile copies the contents of the regular file src to dst, creating or
 // truncating dst with perm.
-func CopyFile(src, dst string, perm os.FileMode) (err error) {
+func copyFile(src, dst string, perm os.FileMode) (err error) {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
