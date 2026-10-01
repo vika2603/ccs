@@ -1,95 +1,105 @@
+// Package profile reads and applies ccs profiles.
+//
+// A profile is a TOML file in ~/.ccs/profiles. Without login it runs Claude
+// Code on ~/.claude directly and only adds settings. With login it gets its
+// own config directory for a separate OAuth login, in which every entry of
+// ~/.claude is a symlink back to ~/.claude except the account identity and
+// the entries the profile isolates.
 package profile
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strings"
+	"syscall"
 
-	"github.com/vika2603/ccs/internal/creds"
-	"github.com/vika2603/ccs/internal/fields"
+	"github.com/BurntSushi/toml"
+
 	"github.com/vika2603/ccs/internal/fsutil"
 	"github.com/vika2603/ccs/internal/layout"
 )
 
-type Manager struct {
-	paths  layout.Paths
-	fields *fields.Registry
-	creds  creds.Store
+// identity lists config-directory entries that belong to one account and
+// are never linked: the global state with the OAuth account (.claude.json,
+// or .config.json where an older install left one, which Claude Code then
+// prefers), its backups, the Linux credentials file, and the organization
+// policy, managed settings, and connector caches Claude Code fetches per
+// account.
+var identity = []string{
+	".claude.json", ".config.json", "backups", ".credentials.json",
+	"policy-limits.json", "policy-limits.json.stamp.json",
+	"remote-settings.json", "remote-settings-consent.json",
+	"mcp-needs-auth-cache.json", "statsig",
 }
 
-func (m Manager) WithCreds(s creds.Store) Manager {
-	m.creds = s
-	return m
+// Profile is the content of ~/.ccs/profiles/<name>.toml.
+type Profile struct {
+	Name     string         `toml:"-"`
+	Login    bool           `toml:"login"`
+	Isolate  []string       `toml:"isolate"`
+	Settings map[string]any `toml:"settings"`
 }
 
-func (m Manager) Remove(name string) error {
-	dir := m.paths.ProfilePath(name)
-	if _, err := os.Stat(dir); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("profile %q does not exist", name)
-		}
-		return err
-	}
-	if m.creds != nil {
-		if err := m.creds.Delete(dir); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not delete keychain entry: %v\n", err)
-		}
-	}
-	if err := os.Remove(m.paths.EnvFile(name)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		fmt.Fprintf(os.Stderr, "warning: could not remove env file %s: %v\n", m.paths.EnvFile(name), err)
-	}
-	return os.RemoveAll(dir)
-}
+var ErrNotFound = errors.New("profile not found")
 
-func NewManager(p layout.Paths, r *fields.Registry) Manager {
-	return Manager{paths: p, fields: r}
-}
-
-func (m Manager) Init() error {
-	for _, d := range []string{m.paths.Root(), m.paths.StateDir(), m.paths.SharedDir(), m.paths.ProfilesDir(), m.paths.EnvDir()} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			return err
-		}
+// Load reads profile name. The default profile always exists and is empty.
+func Load(p layout.Paths, name string) (Profile, error) {
+	if name == layout.DefaultProfile {
+		return Profile{Name: name}, nil
 	}
-	if err := fields.CreateSharedTargets(m.paths.SharedDir(), m.fields.Shared()); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (m Manager) New(name string, blank bool) error {
 	if err := layout.ValidName(name); err != nil {
-		return err
+		return Profile{}, err
 	}
-	dir := m.paths.ProfilePath(name)
-	if _, err := os.Stat(dir); err == nil {
-		return fmt.Errorf("profile %q already exists", name)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
+	b, err := os.ReadFile(p.ProfileFile(name))
+	if errors.Is(err, os.ErrNotExist) {
+		return Profile{}, fmt.Errorf("profile %q does not exist: %w", name, ErrNotFound)
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
+	if err != nil {
+		return Profile{}, err
 	}
-	if blank {
-		return nil
+	pr, err := Parse(b)
+	if err != nil {
+		return Profile{}, fmt.Errorf("%s: %w", p.ProfileFile(name), err)
 	}
-	if err := fields.CreateSharedTargets(m.paths.SharedDir(), m.fields.Shared()); err != nil {
-		return err
-	}
-	for _, f := range m.fields.Shared() {
-		sharedPath := m.paths.SharedField(f.Name)
-		linkPath := filepath.Join(dir, f.Name)
-		if err := fsutil.EnsureSymlink(sharedPath, linkPath); err != nil {
-			return err
-		}
-	}
-	return nil
+	pr.Name = name
+	return pr, nil
 }
 
-func (m Manager) List() ([]string, error) {
-	entries, err := os.ReadDir(m.paths.ProfilesDir())
+// Parse decodes and validates a profile file.
+func Parse(b []byte) (Profile, error) {
+	var pr Profile
+	md, err := toml.Decode(string(b), &pr)
+	if err != nil {
+		return Profile{}, err
+	}
+	if undecoded := md.Undecoded(); len(undecoded) > 0 {
+		for _, key := range undecoded {
+			// Everything under [settings] is passed to Claude Code as is.
+			if len(key) == 0 || key[0] != "settings" {
+				return Profile{}, fmt.Errorf("unknown key %q", key.String())
+			}
+		}
+	}
+	if len(pr.Isolate) > 0 && !pr.Login {
+		return Profile{}, errors.New("isolate requires login = true; without its own directory a profile shares all of ~/.claude")
+	}
+	for _, name := range pr.Isolate {
+		if name == "" || strings.ContainsRune(name, '/') || name == "." || name == ".." {
+			return Profile{}, fmt.Errorf("isolate entry %q must be a top-level name in ~/.claude", name)
+		}
+	}
+	return pr, nil
+}
+
+// List returns profile names in sorted order, excluding the default profile.
+func List(p layout.Paths) ([]string, error) {
+	entries, err := os.ReadDir(p.ProfilesDir())
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
@@ -98,142 +108,257 @@ func (m Manager) List() ([]string, error) {
 	}
 	var names []string
 	for _, e := range entries {
-		if e.IsDir() {
-			names = append(names, e.Name())
+		if name, ok := strings.CutSuffix(e.Name(), ".toml"); ok && !e.IsDir() && layout.ValidName(name) == nil {
+			names = append(names, name)
 		}
 	}
 	sort.Strings(names)
 	return names, nil
 }
 
-func (m Manager) Path(name string) (string, error) {
-	dir := m.paths.ProfilePath(name)
-	if _, err := os.Stat(dir); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return "", fmt.Errorf("profile %q does not exist", name)
-		}
-		return "", err
-	}
-	return dir, nil
+// Template returns the initial content of a new profile file.
+func Template(name string, login bool) string {
+	return fmt.Sprintf(`# ccs profile %[1]q. Edit with: ccs edit %[1]s
+#
+# login = true gives this profile its own Claude Code config directory
+# (~/.ccs/accounts/%[1]s) for a separate OAuth login. Everything in ~/.claude
+# is linked into it except the account identity and the names in isolate.
+# login = false runs Claude Code on ~/.claude itself.
+login = %[2]t
+
+# Entries this profile keeps to itself instead of linking to ~/.claude
+# (login = true only). An existing ~/.claude entry is copied on first use.
+# isolate = ["projects", "history.jsonl"]
+
+# Settings applied on top of ~/.claude/settings.json for this profile only,
+# passed to claude --settings. For an API gateway, for example:
+# [settings.env]
+# ANTHROPIC_BASE_URL = "https://gateway.example.com"
+# ANTHROPIC_AUTH_TOKEN = "..."
+`, name, login)
 }
 
-func (m Manager) Rename(oldName, newName string) error {
-	if err := layout.ValidName(newName); err != nil {
+// Create writes a new profile file from Template.
+func Create(p layout.Paths, name string, login bool) error {
+	if err := layout.ValidName(name); err != nil {
 		return err
 	}
-	oldDir := m.paths.ProfilePath(oldName)
-	newDir := m.paths.ProfilePath(newName)
-	if _, err := os.Stat(oldDir); err != nil {
-		return fmt.Errorf("profile %q does not exist", oldName)
-	}
-	if _, err := os.Stat(newDir); err == nil {
-		return fmt.Errorf("profile %q already exists", newName)
-	}
-	if m.creds != nil {
-		if err := creds.Migrate(m.creds, oldDir, newDir, creds.DefaultClaudeDir()); err != nil {
-			return fmt.Errorf("migrate credentials: %w", err)
-		}
-	}
-	if err := os.Rename(oldDir, newDir); err != nil {
-		return err
-	}
-	oldEnv := m.paths.EnvFile(oldName)
-	if _, err := os.Stat(oldEnv); err == nil {
-		if err := os.MkdirAll(m.paths.EnvDir(), 0o755); err != nil {
-			return err
-		}
-		if err := os.Rename(oldEnv, m.paths.EnvFile(newName)); err != nil {
-			return fmt.Errorf("rename env file: %w", err)
-		}
-	}
-	return nil
-}
-
-func (m Manager) Clone(source, dest string) error {
-	if err := layout.ValidName(source); err != nil {
-		return err
-	}
-	if err := layout.ValidName(dest); err != nil {
-		return err
-	}
-	srcDir := m.paths.ProfilePath(source)
-	if _, err := os.Stat(srcDir); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("profile %q does not exist", source)
-		}
-		return err
-	}
-	dstDir := m.paths.ProfilePath(dest)
-	if _, err := os.Stat(dstDir); err == nil {
-		return fmt.Errorf("profile %q already exists", dest)
+	path := p.ProfileFile(name)
+	if _, err := os.Stat(path); err == nil {
+		return fmt.Errorf("profile %q already exists", name)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if err := os.MkdirAll(dstDir, 0o755); err != nil {
-		return err
-	}
-	ok := false
-	defer func() {
-		if !ok {
-			_ = os.RemoveAll(dstDir)
+	if login {
+		if err := os.MkdirAll(p.AccountDir(name), 0o700); err != nil {
+			return err
 		}
-	}()
-	if err := fields.CreateSharedTargets(m.paths.SharedDir(), m.fields.Shared()); err != nil {
+	}
+	return fsutil.WriteFileAtomic(path, []byte(Template(name, login)), 0o600)
+}
+
+// ConfigDir returns the CLAUDE_CONFIG_DIR for pr, or "" when it runs on
+// ~/.claude.
+func (pr Profile) ConfigDir(p layout.Paths) string {
+	if !pr.Login {
+		return ""
+	}
+	return p.AccountDir(pr.Name)
+}
+
+// Sync brings a login profile's directory in line with ~/.claude: every
+// ~/.claude entry missing from it is linked, isolated entries that are still
+// links are replaced by a copy, and links to identity entries or to entries
+// removed from ~/.claude are dropped. Real files and directories already in
+// the account directory are never touched, so nothing the account wrote is
+// lost; to share such an entry again, delete it from the account directory.
+// Concurrent launches of the same profile sync one after the other.
+func Sync(p layout.Paths, pr Profile) (err error) {
+	if !pr.Login {
+		return nil
+	}
+	accountDir := p.AccountDir(pr.Name)
+	if err := os.MkdirAll(accountDir, 0o700); err != nil {
 		return err
 	}
-	entries, err := os.ReadDir(srcDir)
+	unlock, err := lockFile(p.SyncLock(pr.Name))
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, unlock()) }()
+	entries, err := os.ReadDir(p.ClaudeDir())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
 	for _, e := range entries {
 		name := e.Name()
-		srcPath := filepath.Join(srcDir, name)
-		dstPath := filepath.Join(dstDir, name)
-		if m.fields.Classify(name) == fields.Shared && e.Type()&os.ModeSymlink != 0 {
-			if err := fsutil.EnsureSymlink(m.paths.SharedField(name), dstPath); err != nil {
+		src := filepath.Join(p.ClaudeDir(), name)
+		dst := filepath.Join(accountDir, name)
+		current, err := os.Readlink(dst)
+		isLink := err == nil
+		linked := isLink && current == src
+		exists := isLink
+		if !isLink {
+			if _, err := os.Lstat(dst); err == nil {
+				exists = true
+			} else if !errors.Is(err, os.ErrNotExist) {
 				return err
 			}
+		}
+		switch {
+		case slices.Contains(identity, name):
+			if linked {
+				if err := os.Remove(dst); err != nil {
+					return err
+				}
+			}
+		case slices.Contains(pr.Isolate, name):
+			if linked || !exists {
+				if err := copyIn(src, dst); err != nil {
+					return fmt.Errorf("isolate %s: %w", name, err)
+				}
+			}
+		case !exists:
+			if err := os.Symlink(src, dst); err != nil {
+				return err
+			}
+		}
+	}
+	return pruneLinks(accountDir, p.ClaudeDir())
+}
+
+// copyIn copies src to dst, replacing a link at dst. The copy is staged next
+// to dst and renamed into place, so an interrupted copy never leaves a
+// partial dst that later syncs would keep as the account's own data.
+func copyIn(src, dst string) error {
+	tmp, err := os.MkdirTemp(filepath.Dir(dst), ".ccs-copy-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+	staged := filepath.Join(tmp, filepath.Base(dst))
+	if err := fsutil.CopyTree(src, staged); err != nil {
+		return err
+	}
+	if err := os.Remove(dst); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return os.Rename(staged, dst)
+}
+
+// lockFile waits for an exclusive lock on path and returns the function that
+// releases it.
+func lockFile(path string) (func() error, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		return nil, errors.Join(err, f.Close())
+	}
+	// Closing the file releases the lock.
+	return f.Close, nil
+}
+
+// pruneLinks removes links in accountDir that point to a missing entry of
+// claudeDir. Other links are the user's and are left alone.
+func pruneLinks(accountDir, claudeDir string) error {
+	entries, err := os.ReadDir(accountDir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.Type()&os.ModeSymlink == 0 {
 			continue
 		}
-		if err := fsutil.CopyTree(srcPath, dstPath); err != nil {
-			return err
+		dst := filepath.Join(accountDir, e.Name())
+		target, err := os.Readlink(dst)
+		if err != nil || target != filepath.Join(claudeDir, e.Name()) {
+			continue
 		}
-	}
-	if m.creds != nil {
-		data, err := m.creds.Read(srcDir)
-		switch {
-		case err == nil:
-			if werr := m.creds.Write(dstDir, data); werr != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not write credentials for cloned profile: %v\n", werr)
+		if _, err := os.Lstat(target); errors.Is(err, os.ErrNotExist) {
+			if err := os.Remove(dst); err != nil {
+				return err
 			}
-		case !errors.Is(err, creds.ErrNotFound):
-			fmt.Fprintf(os.Stderr, "warning: could not read credentials of %q: %v\n", source, err)
 		}
 	}
-	srcEnv := m.paths.EnvFile(source)
-	if _, err := os.Stat(srcEnv); err == nil {
-		if err := os.MkdirAll(m.paths.EnvDir(), 0o755); err != nil {
-			return err
-		}
-		data, err := os.ReadFile(srcEnv)
-		if err != nil {
-			return fmt.Errorf("read source env file: %w", err)
-		}
-		if err := os.WriteFile(m.paths.EnvFile(dest), data, 0o600); err != nil {
-			return fmt.Errorf("write cloned env file: %w", err)
-		}
-	}
-	ok = true
 	return nil
 }
 
-func (m Manager) Exists(name string) (bool, error) {
-	_, err := os.Stat(m.paths.ProfilePath(name))
-	if err == nil {
-		return true, nil
+// WriteSettings writes pr's settings as JSON for claude --settings and
+// returns the file path, or "" when the profile has no settings. The file is
+// private because settings usually carry API tokens, which must not appear
+// on a command line.
+func WriteSettings(p layout.Paths, pr Profile) (string, error) {
+	path := p.SettingsFile(pr.Name)
+	if len(pr.Settings) == 0 {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		return "", nil
 	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(pr.Settings); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(p.RunDir(), 0o700); err != nil {
+		return "", err
+	}
+	return path, fsutil.WriteFileAtomic(path, buf.Bytes(), 0o600)
+}
+
+// Remove deletes profile name: its file, its run files, and its account
+// directory if there is one. deleteCreds removes the account's stored OAuth
+// token and is called before the directory is deleted. The profile file is
+// not parsed, so an invalid profile, or one that no longer sets login, is
+// removed completely too.
+func Remove(p layout.Paths, name string, deleteCreds func(configDir string) error) error {
+	if name == layout.DefaultProfile {
+		return errors.New("the default profile is ~/.claude itself and cannot be removed")
+	}
+	if err := layout.ValidName(name); err != nil {
+		return err
+	}
+	file, accountDir := p.ProfileFile(name), p.AccountDir(name)
+	fileExists, err := pathExists(file)
+	if err != nil {
+		return err
+	}
+	accountExists, err := pathExists(accountDir)
+	if err != nil {
+		return err
+	}
+	if !fileExists && !accountExists {
+		return fmt.Errorf("profile %q does not exist: %w", name, ErrNotFound)
+	}
+	if accountExists {
+		if err := deleteCreds(accountDir); err != nil {
+			return fmt.Errorf("delete stored login: %w", err)
+		}
+		if err := os.RemoveAll(accountDir); err != nil {
+			return err
+		}
+	}
+	for _, path := range []string{p.SettingsFile(name), p.SyncLock(name), file} {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
+}
+
+func pathExists(path string) (bool, error) {
+	_, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
-	return false, err
+	return err == nil, err
 }

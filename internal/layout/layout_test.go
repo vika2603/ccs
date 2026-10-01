@@ -8,32 +8,30 @@ import (
 func TestPathsFromHome(t *testing.T) {
 	home := "/tmp/fakehome"
 	p := New(home)
-	want := map[string]string{
-		"Root":        filepath.Join(home, ".ccs"),
-		"ConfigFile":  filepath.Join(home, ".ccs", "config.toml"),
-		"StateDir":    filepath.Join(home, ".ccs", "state"),
-		"ActiveFile":  filepath.Join(home, ".ccs", "state", "active"),
-		"SharedDir":   filepath.Join(home, ".ccs", "shared"),
-		"ProfilesDir": filepath.Join(home, ".ccs", "profiles"),
-	}
-	got := map[string]string{
-		"Root":        p.Root(),
-		"ConfigFile":  p.ConfigFile(),
-		"StateDir":    p.StateDir(),
-		"ActiveFile":  p.ActiveFile(),
-		"SharedDir":   p.SharedDir(),
-		"ProfilesDir": p.ProfilesDir(),
-	}
-	for k, v := range want {
-		if got[k] != v {
-			t.Errorf("%s: got %q, want %q", k, got[k], v)
+	for got, want := range map[string]string{
+		p.Root():               filepath.Join(home, ".ccs"),
+		p.ActiveFile():         filepath.Join(home, ".ccs", "state", "active"),
+		p.ProfileFile("work"):  filepath.Join(home, ".ccs", "profiles", "work.toml"),
+		p.AccountDir("work"):   filepath.Join(home, ".ccs", "accounts", "work"),
+		p.SettingsFile("work"): filepath.Join(home, ".ccs", "run", "work.settings.json"),
+		p.SyncLock("work"):     filepath.Join(home, ".ccs", "run", "work.lock"),
+		p.ShimPath():           filepath.Join(home, ".ccs", "bin", "claude"),
+		p.ClaudeDir():          filepath.Join(home, ".claude"),
+		p.ClaudeJSON():         filepath.Join(home, ".claude.json"),
+	} {
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
 		}
 	}
 }
 
-func TestProfilePath(t *testing.T) {
-	p := New("/tmp/h")
-	if got := p.ProfilePath("work"); got != "/tmp/h/.ccs/profiles/work" {
-		t.Errorf("got %q", got)
+func TestValidNameRejectsReserved(t *testing.T) {
+	for _, name := range []string{"default", "Default", "use", "ls", "init"} {
+		if err := ValidName(name); err == nil {
+			t.Errorf("ValidName(%q) should fail", name)
+		}
+	}
+	if err := ValidName("work"); err != nil {
+		t.Errorf("ValidName(work): %v", err)
 	}
 }

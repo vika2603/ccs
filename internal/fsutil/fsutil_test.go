@@ -57,27 +57,6 @@ func TestCopyTreeFollowsSymlinks(t *testing.T) {
 	}
 }
 
-func TestCopyTreeNoFollowKeepsSymlinks(t *testing.T) {
-	root := t.TempDir()
-	src := filepath.Join(root, "src")
-	writeFile(t, filepath.Join(src, "f.txt"), "f", 0o644)
-	if err := os.Symlink("../shared/skills", filepath.Join(src, "skills")); err != nil {
-		t.Fatal(err)
-	}
-
-	dst := filepath.Join(root, "dst")
-	if err := CopyTreeNoFollow(src, dst); err != nil {
-		t.Fatalf("CopyTreeNoFollow: %v", err)
-	}
-	target, err := os.Readlink(filepath.Join(dst, "skills"))
-	if err != nil {
-		t.Fatalf("skills should stay a symlink: %v", err)
-	}
-	if target != "../shared/skills" {
-		t.Errorf("symlink target = %q", target)
-	}
-}
-
 func TestWriteFileAtomic(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sub", "config.toml")

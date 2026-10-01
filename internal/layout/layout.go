@@ -1,3 +1,5 @@
+// Package layout names the files ccs keeps under ~/.ccs and the Claude Code
+// directories it works with.
 package layout
 
 import (
@@ -18,26 +20,41 @@ func FromEnv() (Paths, error) {
 }
 
 func (p Paths) Root() string        { return filepath.Join(p.home, ".ccs") }
-func (p Paths) ConfigFile() string  { return filepath.Join(p.Root(), "config.toml") }
-func (p Paths) StateDir() string    { return filepath.Join(p.Root(), "state") }
-func (p Paths) ActiveFile() string  { return filepath.Join(p.StateDir(), "active") }
-func (p Paths) SharedDir() string   { return filepath.Join(p.Root(), "shared") }
+func (p Paths) ActiveFile() string  { return filepath.Join(p.Root(), "state", "active") }
 func (p Paths) ProfilesDir() string { return filepath.Join(p.Root(), "profiles") }
-func (p Paths) EnvDir() string      { return filepath.Join(p.Root(), "env") }
+func (p Paths) AccountsDir() string { return filepath.Join(p.Root(), "accounts") }
+func (p Paths) RunDir() string      { return filepath.Join(p.Root(), "run") }
 func (p Paths) BinDir() string      { return filepath.Join(p.Root(), "bin") }
 
-func (p Paths) ShimPath(name string) string {
-	return filepath.Join(p.BinDir(), name)
+// ProfileFile is the TOML file that defines profile name.
+func (p Paths) ProfileFile(name string) string {
+	return filepath.Join(p.ProfilesDir(), name+".toml")
 }
 
-func (p Paths) ProfilePath(name string) string {
-	return filepath.Join(p.ProfilesDir(), name)
+// AccountDir is the CLAUDE_CONFIG_DIR of a profile with its own login.
+func (p Paths) AccountDir(name string) string {
+	return filepath.Join(p.AccountsDir(), name)
 }
 
-func (p Paths) EnvFile(name string) string {
-	return filepath.Join(p.EnvDir(), name+".toml")
+// SettingsFile is where the settings of profile name are written before
+// they are passed to claude --settings.
+func (p Paths) SettingsFile(name string) string {
+	return filepath.Join(p.RunDir(), name+".settings.json")
 }
 
-func (p Paths) SharedField(field string) string {
-	return filepath.Join(p.SharedDir(), field)
+// SyncLock serializes syncs of a login profile's directory.
+func (p Paths) SyncLock(name string) string {
+	return filepath.Join(p.RunDir(), name+".lock")
 }
+
+// ShimPath is the claude shim written by `ccs init`.
+func (p Paths) ShimPath() string { return filepath.Join(p.BinDir(), "claude") }
+
+// ClaudeDir is the config directory Claude Code uses without
+// CLAUDE_CONFIG_DIR; it is the default profile and the source every other
+// profile links to.
+func (p Paths) ClaudeDir() string { return filepath.Join(p.home, ".claude") }
+
+// ClaudeJSON is the global state file of the default profile. Claude Code
+// keeps it next to ~/.claude, not inside it, when CLAUDE_CONFIG_DIR is unset.
+func (p Paths) ClaudeJSON() string { return filepath.Join(p.home, ".claude.json") }

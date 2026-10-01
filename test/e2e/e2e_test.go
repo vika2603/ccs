@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/vika2603/ccs/internal/config"
 )
 
 func buildBinary(t *testing.T) string {
@@ -21,268 +19,187 @@ func buildBinary(t *testing.T) string {
 	return out
 }
 
-func run(t *testing.T, ccs, home string, args ...string) string {
+type env struct {
+	t    *testing.T
+	bin  string
+	home string
+	path string
+}
+
+// setup builds ccs, runs `ccs init` in a fresh HOME, and puts the shim and a
+// fake claude on PATH. The fake prints its config dir, the profile ccs
+// recorded, whether ANTHROPIC_AUTH_TOKEN is set, and its arguments; see out.
+func setup(t *testing.T) env {
 	t.Helper()
-	cmd := exec.Command(ccs, args...)
-	cmd.Env = append(os.Environ(), "HOME="+home)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("%s %v: %v\n%s", ccs, args, err, out)
-	}
-	return string(out)
-}
-
-func runEnv(t *testing.T, ccs, home string, extraEnv []string, args ...string) (string, error) {
-	t.Helper()
-	cmd := exec.Command(ccs, args...)
-	cmd.Env = append(append(os.Environ(), "HOME="+home), extraEnv...)
-	out, err := cmd.CombinedOutput()
-	return string(out), err
-}
-
-func TestFullFlow(t *testing.T) {
-	bin := buildBinary(t)
-	home := t.TempDir()
-	run(t, bin, home, "init")
-
-	src := filepath.Join(home, "src.claude")
-	os.MkdirAll(filepath.Join(src, "skills", "hello"), 0o755)
-	os.WriteFile(filepath.Join(src, "skills", "hello", "SKILL.md"), []byte("hi"), 0o644)
-	os.WriteFile(filepath.Join(src, "CLAUDE.md"), []byte("mem"), 0o644)
-	os.MkdirAll(filepath.Join(src, "projects"), 0o755)
-	os.WriteFile(filepath.Join(src, "projects", "p.txt"), []byte("p"), 0o644)
-
-	run(t, bin, home, "new", "main", "--from", src)
-	run(t, bin, home, "new", "work")
-
-	run(t, bin, home, "use", "work")
-	run(t, bin, home, "field", "fork", "skills", "work")
-
-	out := run(t, bin, home, "status", "work")
-	if !strings.Contains(out, "forked") {
-		t.Errorf("status: %q", out)
-	}
-
-	if got := run(t, bin, home, "doctor"); !strings.Contains(got, "clean") && !strings.Contains(got, "orphan-shared-field") {
-		t.Errorf("doctor: %q", got)
-	}
-}
-
-func TestBackupRestore(t *testing.T) {
-	bin := buildBinary(t)
-	home := t.TempDir()
-	runEnvOrFail := func(extraEnv []string, args ...string) string {
-		t.Helper()
-		out, err := runEnv(t, bin, home, extraEnv, args...)
-		if err != nil {
-			t.Fatalf("ccs %v: %v\n%s", args, err, out)
-		}
-		return out
-	}
-
-	runEnvOrFail(nil, "init")
-	runEnvOrFail(nil, "new", "alpha")
-	runEnvOrFail(nil, "new", "beta")
-	runEnvOrFail(nil, "env", "set", "alpha", "FOO=bar")
-	runEnvOrFail(nil, "use", "alpha")
-	runEnvOrFail(nil, "field", "fork", "CLAUDE.md", "beta")
-	if err := os.WriteFile(filepath.Join(home, ".ccs", "profiles", "beta", "CLAUDE.md"), []byte("beta-local\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(home, ".ccs", "shared", "CLAUDE.md"), []byte("shared-mem\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	backupFile := filepath.Join(t.TempDir(), "backup.tar.gz")
-	runEnvOrFail([]string{"CCS_PASSPHRASE=test"}, "backup", "-o", backupFile)
-
-	dst := t.TempDir()
-	out, err := runEnv(t, bin, dst, []string{"CCS_PASSPHRASE=test"}, "restore", backupFile)
-	if err != nil {
-		t.Fatalf("restore: %v\n%s", err, out)
-	}
-
-	for _, name := range []string{"alpha", "beta"} {
-		if _, err := os.Stat(filepath.Join(dst, ".ccs", "profiles", name)); err != nil {
-			t.Errorf("profile %s missing after restore: %v", name, err)
+	// The test may itself run under a ccs-managed claude, whose profile and
+	// credentials must not leak into the runs.
+	for _, kv := range os.Environ() {
+		key, _, _ := strings.Cut(kv, "=")
+		if key == "CLAUDE_CONFIG_DIR" || key == "CCS_PROFILE" || key == "CLAUDE_CODE_OAUTH_TOKEN" || strings.HasPrefix(key, "ANTHROPIC_") {
+			t.Setenv(key, "")
+			os.Unsetenv(key)
 		}
 	}
-	if b, err := os.ReadFile(filepath.Join(dst, ".ccs", "shared", "CLAUDE.md")); err != nil || string(b) != "shared-mem\n" {
-		t.Errorf("restored shared CLAUDE.md: %v / %q", err, b)
-	}
-	if b, err := os.ReadFile(filepath.Join(dst, ".ccs", "profiles", "beta", "CLAUDE.md")); err != nil || string(b) != "beta-local\n" {
-		t.Errorf("restored beta fork: %v / %q", err, b)
-	}
-	// alpha CLAUDE.md should be a symlink that resolves to shared.
-	alphaCLAUDE := filepath.Join(dst, ".ccs", "profiles", "alpha", "CLAUDE.md")
-	info, err := os.Lstat(alphaCLAUDE)
-	if err != nil {
-		t.Fatalf("lstat alpha CLAUDE.md: %v", err)
-	}
-	if info.Mode()&os.ModeSymlink == 0 {
-		t.Errorf("alpha CLAUDE.md should be a symlink after restore")
-	}
-	if b, err := os.ReadFile(alphaCLAUDE); err != nil || string(b) != "shared-mem\n" {
-		t.Errorf("follow alpha CLAUDE.md: %v / %q", err, b)
-	}
-	if b, err := os.ReadFile(filepath.Join(dst, ".ccs", "env", "alpha.toml")); err != nil || !strings.Contains(string(b), "FOO") {
-		t.Errorf("restored env alpha.toml: %v / %q", err, b)
-	}
-	// active profile should be alpha
-	if b, err := os.ReadFile(filepath.Join(dst, ".ccs", "state", "active")); err != nil || strings.TrimSpace(string(b)) != "alpha" {
-		t.Errorf("active after restore: %v / %q", err, b)
-	}
-}
-
-func TestCloneProfile(t *testing.T) {
-	bin := buildBinary(t)
 	home := t.TempDir()
-	run(t, bin, home, "init")
-	run(t, bin, home, "new", "src")
-
-	// Write isolated data into source profile.
-	if err := os.WriteFile(filepath.Join(home, ".ccs", "profiles", "src", ".claude.json"), []byte(`{"user":"alice"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	// Write shared content.
-	if err := os.WriteFile(filepath.Join(home, ".ccs", "shared", "CLAUDE.md"), []byte("shared-mem\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	run(t, bin, home, "new", "dst", "--from", "src")
-
-	// Isolated file should be a real copy.
-	b, err := os.ReadFile(filepath.Join(home, ".ccs", "profiles", "dst", ".claude.json"))
-	if err != nil || string(b) != `{"user":"alice"}` {
-		t.Errorf("cloned .claude.json: %v / %q", err, b)
-	}
-
-	// Shared field should be a symlink resolving to shared content.
-	dstCLAUDE := filepath.Join(home, ".ccs", "profiles", "dst", "CLAUDE.md")
-	info, err := os.Lstat(dstCLAUDE)
-	if err != nil {
-		t.Fatalf("lstat dst CLAUDE.md: %v", err)
-	}
-	if info.Mode()&os.ModeSymlink == 0 {
-		t.Error("dst CLAUDE.md should be a symlink")
-	}
-	if b, err := os.ReadFile(dstCLAUDE); err != nil || string(b) != "shared-mem\n" {
-		t.Errorf("dst CLAUDE.md content: %v / %q", err, b)
-	}
-
-	// Source should be unaffected.
-	b, err = os.ReadFile(filepath.Join(home, ".ccs", "profiles", "src", ".claude.json"))
-	if err != nil || string(b) != `{"user":"alice"}` {
-		t.Errorf("source .claude.json altered: %v / %q", err, b)
-	}
-
-	// ls should show both.
-	out := run(t, bin, home, "ls")
-	if !strings.Contains(out, "src") || !strings.Contains(out, "dst") {
-		t.Errorf("ls: %q", out)
-	}
-}
-
-// TestLaunchWrapperRoutesThroughShimPreservesProfile covers a wrapping
-// launch.command (e.g. `caffeinate claude`): `ccs b` execs the wrapper with
-// CLAUDE_CONFIG_DIR set to b, the wrapper resolves `claude` via PATH back to
-// ~/.ccs/bin/claude, and the shim must keep b instead of falling back to the
-// active profile.
-func TestLaunchWrapperRoutesThroughShimPreservesProfile(t *testing.T) {
-	t.Setenv("CLAUDE_CONFIG_DIR", "")
-	bin := buildBinary(t)
-	home := t.TempDir()
-	run(t, bin, home, "init")
-	run(t, bin, home, "new", "a")
-	run(t, bin, home, "new", "b")
-	run(t, bin, home, "use", "a")
-
-	cfgPath := filepath.Join(home, ".ccs", "config.toml")
-	cfg, err := config.Load(cfgPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.Launch.Command = []string{"sh", "-c", "claude"}
-	if err := config.Save(cfgPath, cfg); err != nil {
-		t.Fatal(err)
-	}
-
 	fakeDir := filepath.Join(home, "fakebin")
 	if err := os.MkdirAll(fakeDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(fakeDir, "claude"), []byte("#!/bin/sh\necho CCD=$CLAUDE_CONFIG_DIR\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// The shim comes first on PATH, as in a real setup.
-	shimDir := filepath.Join(home, ".ccs", "bin")
-	env := []string{"PATH=" + shimDir + ":" + fakeDir + ":/usr/bin:/bin"}
-
-	out, err := runEnv(t, bin, home, env, "b")
-	if err != nil {
-		t.Fatalf("ccs b: %v\n%s", err, out)
-	}
-	want := "CCD=" + filepath.Join(home, ".ccs", "profiles", "b")
-	if strings.TrimSpace(out) != want {
-		t.Errorf("got %q, want %q", strings.TrimSpace(out), want)
-	}
-}
-
-// `ccs -- args` names no profile: it behaves like `claude args` through the
-// shim, using the active profile or the default ~/.claude when none is set.
-func TestDashPassesArgsToDefaultClaude(t *testing.T) {
-	// The test may itself run under a ccs-managed claude.
-	t.Setenv("CLAUDE_CONFIG_DIR", "")
-	bin := buildBinary(t)
-	home := t.TempDir()
-	run(t, bin, home, "init")
-	run(t, bin, home, "new", "work")
-
-	fakeDir := filepath.Join(home, "fakebin")
-	if err := os.MkdirAll(fakeDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	script := "#!/bin/sh\necho \"CCD=$CLAUDE_CONFIG_DIR ARGS=$*\"\n"
+	script := "#!/bin/sh\necho \"CCD=$CLAUDE_CONFIG_DIR PROFILE=$CCS_PROFILE TOKEN=${ANTHROPIC_AUTH_TOKEN:+set} ARGS=$*\"\n"
 	if err := os.WriteFile(filepath.Join(fakeDir, "claude"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	env := []string{"PATH=" + fakeDir + ":/usr/bin:/bin"}
-	workDir := filepath.Join(home, ".ccs", "profiles", "work")
-
-	cases := []struct {
-		name string
-		args []string
-		want string
-	}{
-		{"no active profile", []string{"--", "-v", "--model", "x"}, "CCD= ARGS=-v --model x"},
-		{"active profile", []string{"--", "-v"}, "CCD=" + workDir + " ARGS=-v"},
-		{"explicit profile", []string{"work", "--", "-v"}, "CCD=" + workDir + " ARGS=-v"},
+	e := env{
+		t:    t,
+		bin:  buildBinary(t),
+		home: home,
+		path: filepath.Join(home, ".ccs", "bin") + ":" + fakeDir + ":/usr/bin:/bin",
 	}
-	for i, tc := range cases {
-		if i == 1 {
-			run(t, bin, home, "use", "work")
-		}
-		out, err := runEnv(t, bin, home, env, tc.args...)
-		if err != nil {
-			t.Fatalf("%s: %v\n%s", tc.name, err, out)
-		}
-		if got := strings.TrimSpace(out); got != tc.want {
-			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
-		}
-	}
+	e.run(nil, "init")
+	return e
+}
 
-	// An explicit CLAUDE_CONFIG_DIR wins over the active profile, as in the shim.
-	custom := filepath.Join(home, "custom")
-	out, err := runEnv(t, bin, home, append(env, "CLAUDE_CONFIG_DIR="+custom), "--", "-c")
+// out is what the fake claude prints for the given environment and args.
+func out(ccd, profile, token, args string) string {
+	return "CCD=" + ccd + " PROFILE=" + profile + " TOKEN=" + token + " ARGS=" + args
+}
+
+func (e env) exec(name string, extraEnv []string, args ...string) string {
+	e.t.Helper()
+	cmd := exec.Command(name, args...)
+	cmd.Env = append(os.Environ(), "HOME="+e.home, "PATH="+e.path)
+	cmd.Env = append(cmd.Env, extraEnv...)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("explicit CCD: %v\n%s", err, out)
+		e.t.Fatalf("%s %v: %v\n%s", name, args, err, out)
 	}
-	if got := strings.TrimSpace(out); got != "CCD="+custom+" ARGS=-c" {
-		t.Errorf("explicit CCD: got %q", got)
+	return strings.TrimSpace(string(out))
+}
+
+func (e env) run(extraEnv []string, args ...string) string {
+	e.t.Helper()
+	return e.exec(e.bin, extraEnv, args...)
+}
+
+// claude runs `claude args...` through the shim.
+func (e env) claude(extraEnv []string, args ...string) string {
+	e.t.Helper()
+	return e.exec(filepath.Join(e.home, ".ccs", "bin", "claude"), extraEnv, args...)
+}
+
+func (e env) write(rel, content string) {
+	e.t.Helper()
+	path := filepath.Join(e.home, rel)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		e.t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+func TestDefaultProfileRunsOnClaudeDir(t *testing.T) {
+	e := setup(t)
+	if got := e.run(nil, "--", "-c"); got != out("", "default", "", "-c") {
+		t.Errorf("ccs -- -c: %q", got)
+	}
+	if got := e.claude(nil, "-p", "hi"); got != out("", "default", "", "-p hi") {
+		t.Errorf("claude via shim: %q", got)
+	}
+}
+
+func TestGatewayProfilePassesSettings(t *testing.T) {
+	e := setup(t)
+	e.run(nil, "new", "gw")
+	e.write(".ccs/profiles/gw.toml", "[settings.env]\nANTHROPIC_BASE_URL = \"https://gw.example.com\"\nANTHROPIC_AUTH_TOKEN = \"secret\"\n")
+	settings := filepath.Join(e.home, ".ccs", "run", "gw.settings.json")
+
+	want := out("", "gw", "", "--settings "+settings+" -c")
+	got := e.run(nil, "gw", "--", "-c")
+	if got != want {
+		t.Errorf("ccs gw -- -c: got %q, want %q", got, want)
+	}
+	if strings.Contains(got, "secret") {
+		t.Error("token must not appear on the command line")
+	}
+	b, err := os.ReadFile(settings)
+	if err != nil || !strings.Contains(string(b), "https://gw.example.com") {
+		t.Errorf("settings file: %v %s", err, b)
 	}
 
-	out, err = runEnv(t, bin, home, env, "-v")
-	if err != nil || !strings.HasPrefix(out, "ccs ") {
-		t.Errorf("`ccs -v` should still print the ccs version, got %q, %v", out, err)
+	e.run(nil, "use", "gw")
+	if got := e.claude(nil, "-c"); got != want {
+		t.Errorf("claude via shim with gw active: %q", got)
+	}
+}
+
+func TestLoginProfileLinksClaudeDir(t *testing.T) {
+	e := setup(t)
+	e.write(".claude/skills/a/SKILL.md", "a")
+	e.write(".claude/settings.json", "{}")
+	e.write(".claude/projects/p.txt", "shared")
+	e.run(nil, "new", "work", "--login")
+	e.write(".ccs/profiles/work.toml", "login = true\nisolate = [\"projects\"]\n")
+	acct := filepath.Join(e.home, ".ccs", "accounts", "work")
+
+	if got := e.run(nil, "work"); got != out(acct, "work", "", "") {
+		t.Errorf("ccs work: %q", got)
+	}
+	for _, name := range []string{"skills", "settings.json"} {
+		if target, err := os.Readlink(filepath.Join(acct, name)); err != nil || target != filepath.Join(e.home, ".claude", name) {
+			t.Errorf("%s should link to ~/.claude: %q %v", name, target, err)
+		}
+	}
+	info, err := os.Lstat(filepath.Join(acct, "projects"))
+	if err != nil || info.Mode()&os.ModeSymlink != 0 {
+		t.Errorf("isolated projects should be a real copy: %v", err)
+	}
+}
+
+// A CLAUDE_CONFIG_DIR set by the caller wins over the active profile, so a
+// wrapper that resolves `claude` back to the shim keeps its profile.
+func TestShimHonorsCallerConfigDir(t *testing.T) {
+	e := setup(t)
+	e.run(nil, "new", "work", "--login")
+	e.run(nil, "use", "work")
+	custom := filepath.Join(e.home, "custom")
+	extra := []string{"CLAUDE_CONFIG_DIR=" + custom}
+	if got := e.claude(extra, "-c"); got != out(custom, "", "", "-c") {
+		t.Errorf("claude via shim: %q", got)
+	}
+	if got := e.run(extra, "--", "-c"); got != out(custom, "", "", "-c") {
+		t.Errorf("ccs -- -c: %q", got)
+	}
+	acct := filepath.Join(e.home, ".ccs", "accounts", "work")
+	if got := e.run(extra, "work"); got != out(acct, "work", "", "") {
+		t.Errorf("an explicit profile wins over the caller's dir: %q", got)
+	}
+}
+
+// A claude started inside a ccs session, for example by a hook or the Bash
+// tool, keeps the session's profile rather than switching to the active one.
+// The outer session's environment is what such a child inherits.
+func TestNestedClaudeKeepsSessionProfile(t *testing.T) {
+	e := setup(t)
+	e.run(nil, "new", "gw")
+	e.write(".ccs/profiles/gw.toml", "[settings.env]\nANTHROPIC_AUTH_TOKEN = \"gw-token\"\n")
+	e.run(nil, "new", "work", "--login")
+	e.run(nil, "use", "work")
+	settings := filepath.Join(e.home, ".ccs", "run", "gw.settings.json")
+	acct := filepath.Join(e.home, ".ccs", "accounts", "work")
+
+	inGw := []string{"CCS_PROFILE=gw", "ANTHROPIC_AUTH_TOKEN=gw-token"}
+	if got, want := e.claude(inGw, "-c"), out("", "gw", "", "--settings "+settings+" -c"); got != want {
+		t.Errorf("claude inside gw: got %q, want %q", got, want)
+	}
+	inWork := []string{"CCS_PROFILE=work", "CLAUDE_CONFIG_DIR=" + acct}
+	if got, want := e.claude(inWork, "-c"), out(acct, "work", "", "-c"); got != want {
+		t.Errorf("claude inside work: got %q, want %q", got, want)
+	}
+
+	// An explicit profile started from inside gw must not inherit gw's token;
+	// it would override work's own login.
+	if got, want := e.run(inGw, "work"), out(acct, "work", "", ""); got != want {
+		t.Errorf("ccs work inside gw: got %q, want %q", got, want)
 	}
 }
