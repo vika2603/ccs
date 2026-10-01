@@ -2,11 +2,11 @@ package main
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/spf13/cobra"
 
 	"github.com/vika2603/ccs/internal/config"
-	"github.com/vika2603/ccs/internal/layout"
 )
 
 func newClassifyCmd() *cobra.Command {
@@ -27,14 +27,11 @@ func newClassifyCmd() *cobra.Command {
 			if name == "" {
 				return fmt.Errorf("name must not be empty")
 			}
-			p, err := layout.FromEnv()
+			a, err := loadApp()
 			if err != nil {
 				return err
 			}
-			cfg, err := config.Load(p.ConfigFile())
-			if err != nil {
-				return err
-			}
+			cfg := a.cfg
 			if existing, ok := existingCategory(cfg, name); ok {
 				return fmt.Errorf("%q is already classified as %s", name, existing)
 			}
@@ -46,7 +43,7 @@ func newClassifyCmd() *cobra.Command {
 			default:
 				return fmt.Errorf("invalid category %q; must be shared or isolated", category)
 			}
-			if err := config.Save(p.ConfigFile(), cfg); err != nil {
+			if err := config.Save(a.ConfigFile(), cfg); err != nil {
 				return err
 			}
 			cmd.Printf("classified %s as %s\n", name, category)
@@ -56,15 +53,11 @@ func newClassifyCmd() *cobra.Command {
 }
 
 func existingCategory(c config.Config, name string) (string, bool) {
-	for _, v := range c.Shared {
-		if v == name {
-			return "shared", true
-		}
+	if slices.Contains(c.Shared, name) {
+		return "shared", true
 	}
-	for _, v := range c.Isolated {
-		if v == name {
-			return "isolated", true
-		}
+	if slices.Contains(c.Isolated, name) {
+		return "isolated", true
 	}
 	return "", false
 }

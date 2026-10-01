@@ -13,12 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/vika2603/ccs/internal/archive"
-	"github.com/vika2603/ccs/internal/config"
 	"github.com/vika2603/ccs/internal/creds"
-	"github.com/vika2603/ccs/internal/fields"
-	"github.com/vika2603/ccs/internal/layout"
-	"github.com/vika2603/ccs/internal/profile"
-	"github.com/vika2603/ccs/internal/state"
 )
 
 func newBackupCmd() *cobra.Command {
@@ -29,31 +24,25 @@ func newBackupCmd() *cobra.Command {
 		Short: "Back up the entire ccs directory to a single tar.gz",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			p, err := layout.FromEnv()
+			a, err := loadApp()
 			if err != nil {
 				return err
 			}
-			if _, err := os.Stat(p.Root()); err != nil {
-				return fmt.Errorf("ccs root %s does not exist; run `ccs init` first", p.Root())
+			if _, err := os.Stat(a.Root()); err != nil {
+				return fmt.Errorf("ccs root %s does not exist; run `ccs init` first", a.Root())
 			}
-			cfg, err := config.Load(p.ConfigFile())
-			if err != nil {
-				return err
-			}
-			reg := fields.NewRegistry(cfg)
-			mgr := profile.NewManager(p, reg).WithCreds(creds.New())
+			cfg := a.cfg
 
-			profiles, err := mgr.List()
+			profiles, err := a.mgr.List()
 			if err != nil {
 				return err
 			}
-			active, _ := state.Read(p.ActiveFile())
+			active, _ := a.Active()
 
-			store := creds.New()
 			bundle := map[string]string{}
 			for _, name := range profiles {
-				dir := p.ProfilePath(name)
-				data, err := store.Read(dir)
+				dir := a.ProfilePath(name)
+				data, err := a.creds.Read(dir)
 				if errors.Is(err, creds.ErrNotFound) {
 					continue
 				}
@@ -98,12 +87,12 @@ func newBackupCmd() *cobra.Command {
 				Exclude:        cfg.Export.Exclude,
 			}
 			opts := archive.BackupPackOptions{
-				CCSRoot:           p.Root(),
+				CCSRoot:           a.Root(),
 				Profiles:          profiles,
 				PerProfileExclude: cfg.Export.Exclude,
-				ConfigPath:        p.ConfigFile(),
-				EnvDir:            p.EnvDir(),
-				SharedDir:         p.SharedDir(),
+				ConfigPath:        a.ConfigFile(),
+				EnvDir:            a.EnvDir(),
+				SharedDir:         a.SharedDir(),
 				Credentials:       enc,
 				Manifest:          manifest,
 			}

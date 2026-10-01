@@ -9,9 +9,8 @@ import (
 
 	"github.com/vika2603/ccs/internal/creds"
 	"github.com/vika2603/ccs/internal/fields"
+	"github.com/vika2603/ccs/internal/fsutil"
 	"github.com/vika2603/ccs/internal/layout"
-	"github.com/vika2603/ccs/internal/link"
-	"github.com/vika2603/ccs/internal/state"
 )
 
 type Manager struct {
@@ -61,7 +60,7 @@ func (m Manager) Init() error {
 }
 
 func (m Manager) New(name string, blank bool) error {
-	if err := state.ValidName(name); err != nil {
+	if err := layout.ValidName(name); err != nil {
 		return err
 	}
 	dir := m.paths.ProfilePath(name)
@@ -82,7 +81,7 @@ func (m Manager) New(name string, blank bool) error {
 	for _, f := range m.fields.Shared() {
 		sharedPath := m.paths.SharedField(f.Name)
 		linkPath := filepath.Join(dir, f.Name)
-		if err := link.EnsureSymlink(sharedPath, linkPath); err != nil {
+		if err := fsutil.EnsureSymlink(sharedPath, linkPath); err != nil {
 			return err
 		}
 	}
@@ -119,7 +118,7 @@ func (m Manager) Path(name string) (string, error) {
 }
 
 func (m Manager) Rename(oldName, newName string) error {
-	if err := state.ValidName(newName); err != nil {
+	if err := layout.ValidName(newName); err != nil {
 		return err
 	}
 	oldDir := m.paths.ProfilePath(oldName)
@@ -131,7 +130,7 @@ func (m Manager) Rename(oldName, newName string) error {
 		return fmt.Errorf("profile %q already exists", newName)
 	}
 	if m.creds != nil {
-		if err := creds.Migrate(m.creds, oldDir, newDir, filepath.Join(os.Getenv("HOME"), ".claude")); err != nil {
+		if err := creds.Migrate(m.creds, oldDir, newDir, creds.DefaultClaudeDir()); err != nil {
 			return fmt.Errorf("migrate credentials: %w", err)
 		}
 	}
@@ -151,10 +150,10 @@ func (m Manager) Rename(oldName, newName string) error {
 }
 
 func (m Manager) Clone(source, dest string) error {
-	if err := state.ValidName(source); err != nil {
+	if err := layout.ValidName(source); err != nil {
 		return err
 	}
-	if err := state.ValidName(dest); err != nil {
+	if err := layout.ValidName(dest); err != nil {
 		return err
 	}
 	srcDir := m.paths.ProfilePath(source)
@@ -188,36 +187,27 @@ func (m Manager) Clone(source, dest string) error {
 	}
 	for _, e := range entries {
 		name := e.Name()
-		class := m.fields.Describe(name)
 		srcPath := filepath.Join(srcDir, name)
 		dstPath := filepath.Join(dstDir, name)
-		if class.Category == fields.Shared {
-			info, lerr := os.Lstat(srcPath)
-			if lerr != nil {
-				return lerr
-			}
-			if info.Mode()&os.ModeSymlink != 0 {
-				sharedPath := m.paths.SharedField(name)
-				if err := link.EnsureSymlink(sharedPath, dstPath); err != nil {
-					return err
-				}
-			} else {
-				if err := fields.CopyByKind(srcPath, dstPath, class.Kind); err != nil {
-					return err
-				}
-			}
-		} else {
-			if err := fields.CopyByKind(srcPath, dstPath, class.Kind); err != nil {
+		if m.fields.Classify(name) == fields.Shared && e.Type()&os.ModeSymlink != 0 {
+			if err := fsutil.EnsureSymlink(m.paths.SharedField(name), dstPath); err != nil {
 				return err
 			}
+			continue
+		}
+		if err := fsutil.CopyTree(srcPath, dstPath); err != nil {
+			return err
 		}
 	}
 	if m.creds != nil {
 		data, err := m.creds.Read(srcDir)
-		if err == nil {
+		switch {
+		case err == nil:
 			if werr := m.creds.Write(dstDir, data); werr != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not write credentials for cloned profile: %v\n", werr)
 			}
+		case !errors.Is(err, creds.ErrNotFound):
+			fmt.Fprintf(os.Stderr, "warning: could not read credentials of %q: %v\n", source, err)
 		}
 	}
 	srcEnv := m.paths.EnvFile(source)

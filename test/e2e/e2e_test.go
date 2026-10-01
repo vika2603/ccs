@@ -204,7 +204,6 @@ func TestRunRoutesThroughShimPreservesProfile(t *testing.T) {
 	run(t, bin, home, "new", "a")
 	run(t, bin, home, "new", "b")
 	run(t, bin, home, "use", "a") // state/active = a
-	run(t, bin, home, "install-shim")
 
 	// Fake `claude` that prints its CCD so we can observe which profile
 	// actually reached the final process.
@@ -239,5 +238,26 @@ func TestRunRoutesThroughShimPreservesProfile(t *testing.T) {
 	gotCCDa := filepath.Join(home, ".ccs", "profiles", "a")
 	if strings.Contains(out, "CCD="+gotCCDa) {
 		t.Errorf("shim clobbered CCD back to active profile a: %q", out)
+	}
+
+	// A CLAUDE_CONFIG_DIR exported by the shell hook of older releases is
+	// marked with CCS_MANAGED_CCD and may be stale; the active profile wins.
+	stale := append(extraEnv, "CLAUDE_CONFIG_DIR="+wantCCD, "CCS_MANAGED_CCD=1")
+	out, err = runEnv(t, bin, home, stale, "__shim_exec", "claude")
+	if err != nil {
+		t.Fatalf("shim exec: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "CCD="+gotCCDa) {
+		t.Errorf("expected active profile a to override legacy CCD, got: %q", out)
+	}
+
+	// With no active profile, the stale value is dropped, not passed through.
+	run(t, bin, home, "unuse")
+	out, err = runEnv(t, bin, home, stale, "__shim_exec", "claude")
+	if err != nil {
+		t.Fatalf("shim exec: %v\n%s", err, out)
+	}
+	if strings.TrimSpace(out) != "CCD=" {
+		t.Errorf("legacy CCD should be dropped when no profile is active, got: %q", out)
 	}
 }

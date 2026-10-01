@@ -4,10 +4,13 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"io"
+	"maps"
 	"os"
+	"path"
 	"path/filepath"
+	"slices"
 	"time"
 )
 
@@ -20,53 +23,54 @@ type PackOptions struct {
 	Credentials    []byte
 }
 
+// Pack writes a single-profile export archive. Only the entries named in
+// ProfileEntries are packed from ProfileDir.
 func Pack(outPath string, opts PackOptions) error {
+	return writeArchive(outPath, func(tw *tar.Writer) error {
+		opts.Manifest.ExportedAt = time.Now().UTC()
+		manifestJSON, err := json.MarshalIndent(opts.Manifest, "", "  ")
+		if err != nil {
+			return err
+		}
+		if err := writeTarBytes(tw, "manifest.json", manifestJSON); err != nil {
+			return err
+		}
+		for _, name := range opts.ProfileEntries {
+			entryPath := filepath.Join(opts.ProfileDir, name)
+			if err := packEntry(tw, entryPath, path.Join("profile", name)); err != nil {
+				return err
+			}
+		}
+		for _, field := range slices.Sorted(maps.Keys(opts.SharedPaths)) {
+			if err := packEntry(tw, opts.SharedPaths[field], path.Join("shared", field)); err != nil {
+				return err
+			}
+		}
+		if opts.Credentials != nil {
+			return writeTarBytes(tw, "credentials.json.age", opts.Credentials)
+		}
+		return nil
+	})
+}
+
+// writeArchive creates outPath as a gzipped tar, lets fill write its entries,
+// and closes every layer so flush errors are reported. A partially written
+// file is removed on failure.
+func writeArchive(outPath string, fill func(*tar.Writer) error) (err error) {
 	f, err := os.Create(outPath)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() {
+		if err != nil {
+			_ = os.Remove(outPath)
+		}
+	}()
 	gz := gzip.NewWriter(f)
-	defer gz.Close()
 	tw := tar.NewWriter(gz)
-	defer tw.Close()
-
-	opts.Manifest.ExportedAt = time.Now().UTC()
-	manifestJSON, err := json.MarshalIndent(opts.Manifest, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := writeTarBytes(tw, "manifest.json", manifestJSON); err != nil {
-		return err
-	}
-
-	if len(opts.ProfileEntries) == 0 {
-		if err := walkDeref(tw, opts.ProfileDir, "profile"); err != nil {
-			return err
-		}
-	} else {
-		for _, name := range opts.ProfileEntries {
-			entryPath := filepath.Join(opts.ProfileDir, name)
-			archiveName := filepath.ToSlash(filepath.Join("profile", name))
-			if err := packEntry(tw, entryPath, archiveName); err != nil {
-				return err
-			}
-		}
-	}
-
-	for field, path := range opts.SharedPaths {
-		archiveName := filepath.ToSlash(filepath.Join("shared", field))
-		if err := packEntry(tw, path, archiveName); err != nil {
-			return err
-		}
-	}
-
-	if opts.Credentials != nil {
-		if err := writeTarBytes(tw, "credentials.json.age", opts.Credentials); err != nil {
-			return err
-		}
-	}
-	return nil
+	err = fill(tw)
+	err = errors.Join(err, tw.Close(), gz.Close(), f.Close())
+	return err
 }
 
 func packEntry(tw *tar.Writer, srcPath, archivePath string) error {
@@ -165,73 +169,15 @@ func WriteMinimalManifestTar(w io.Writer, m Manifest) error {
 		return err
 	}
 	tw := tar.NewWriter(w)
-	if err := writeTarBytes(tw, "manifest.json", data); err != nil {
-		tw.Close()
-		return err
-	}
-	return tw.Close()
+	return errors.Join(writeTarBytes(tw, "manifest.json", data), tw.Close())
 }
 
+// Unpack extracts a single-profile export archive into destDir and returns
+// its manifest.
 func Unpack(tarPath, destDir string) (Manifest, error) {
-	f, err := os.Open(tarPath)
-	if err != nil {
-		return Manifest{}, err
-	}
-	defer f.Close()
-	gz, err := gzip.NewReader(f)
-	if err != nil {
-		return Manifest{}, err
-	}
-	tr := tar.NewReader(gz)
 	var m Manifest
-	var manifestSeen bool
-	for {
-		h, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return Manifest{}, err
-		}
-		out := filepath.Join(destDir, filepath.FromSlash(h.Name))
-		switch h.Typeflag {
-		case tar.TypeDir:
-			if err := os.MkdirAll(out, os.FileMode(h.Mode)); err != nil {
-				return Manifest{}, err
-			}
-		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
-				return Manifest{}, err
-			}
-			wf, err := os.OpenFile(out, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(h.Mode))
-			if err != nil {
-				return Manifest{}, err
-			}
-			if _, err := io.Copy(wf, tr); err != nil {
-				wf.Close()
-				return Manifest{}, err
-			}
-			wf.Close()
-			if h.Name == "manifest.json" {
-				b, _ := os.ReadFile(out)
-				if err := json.Unmarshal(b, &m); err != nil {
-					return Manifest{}, err
-				}
-				manifestSeen = true
-			}
-		case tar.TypeSymlink:
-			if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
-				return Manifest{}, err
-			}
-			if err := os.Symlink(h.Linkname, out); err != nil {
-				return Manifest{}, err
-			}
-		default:
-			return Manifest{}, fmt.Errorf("unsupported tar entry %q", h.Name)
-		}
-	}
-	if !manifestSeen {
-		return Manifest{}, fmt.Errorf("manifest.json missing from archive")
+	if err := extract(tarPath, destDir, "manifest.json", &m, false); err != nil {
+		return Manifest{}, err
 	}
 	return m, nil
 }

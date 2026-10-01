@@ -60,9 +60,7 @@ func TestMigrateVerifiesReadableBeforeDelete(t *testing.T) {
 	oldProfile := filepath.Join(t.TempDir(), "old")
 	newProfile := filepath.Join(t.TempDir(), "new")
 	s := &migrateReadMismatchFake{
-		migrateStoreFake: migrateStoreFake{
-			reads: map[string][]byte{oldProfile: []byte("data")},
-		},
+		reads: map[string][]byte{oldProfile: []byte("data")},
 	}
 	err := Migrate(s, oldProfile, newProfile, filepath.Join(t.TempDir(), ".claude"))
 	if err == nil {

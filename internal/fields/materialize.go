@@ -3,10 +3,15 @@ package fields
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/vika2603/ccs/internal/fsutil"
 )
+
+// ConflictFunc decides whether incomingPath may overwrite the non-empty
+// shared entry at existingPath.
+type ConflictFunc func(name, existingPath, incomingPath string) (overwrite bool, err error)
 
 type Prompter interface {
 	OnSharedConflict(name, existingPath, incomingPath string) (overwrite bool, err error)
@@ -82,106 +87,33 @@ func ImportEntries(srcProfileDir, dstProfileDir, sharedDir string, reg *Registry
 func importSharedEntry(name, srcPath, sharedDir, dstProfileDir string, prompter Prompter, move bool) error {
 	sharedPath := filepath.Join(sharedDir, name)
 	linkPath := filepath.Join(dstProfileDir, name)
-	info, statErr := os.Lstat(sharedPath)
-	switch {
-	case statErr == nil:
-		empty, err := isSharedPlaceholderEmpty(sharedPath, info)
+	empty, err := fsutil.IsEmpty(sharedPath)
+	if err != nil {
+		return err
+	}
+	if !empty {
+		overwrite, err := prompter.OnSharedConflict(name, sharedPath, srcPath)
 		if err != nil {
 			return err
 		}
-		if !empty {
-			overwrite, err := prompter.OnSharedConflict(name, sharedPath, srcPath)
-			if err != nil {
-				return err
-			}
-			if !overwrite {
-				return fmt.Errorf("import aborted at shared entry %q", name)
-			}
+		if !overwrite {
+			return fmt.Errorf("import aborted at shared entry %q", name)
 		}
-		if err := os.RemoveAll(sharedPath); err != nil {
-			return err
-		}
-		if err := moveOrCopy(srcPath, sharedPath, move); err != nil {
-			return err
-		}
-	case errors.Is(statErr, os.ErrNotExist):
-		if err := moveOrCopy(srcPath, sharedPath, move); err != nil {
-			return err
-		}
-	default:
-		return statErr
 	}
-	return ensureSymlinkTo(sharedPath, linkPath)
-}
-
-func isSharedPlaceholderEmpty(path string, info os.FileInfo) (bool, error) {
-	if !info.IsDir() {
-		return info.Size() == 0, nil
-	}
-	entries, err := os.ReadDir(path)
-	if err != nil {
-		return false, err
-	}
-	return len(entries) == 0, nil
-}
-
-func ensureSymlinkTo(target, linkPath string) error {
-	if err := os.MkdirAll(filepath.Dir(linkPath), 0o755); err != nil {
+	if err := os.RemoveAll(sharedPath); err != nil {
 		return err
 	}
-	if info, err := os.Lstat(linkPath); err == nil {
-		if info.Mode()&os.ModeSymlink != 0 {
-			existing, _ := os.Readlink(linkPath)
-			if existing == target {
-				return nil
-			}
-		}
-		if err := os.RemoveAll(linkPath); err != nil {
-			return err
-		}
+	if err := moveOrCopy(srcPath, sharedPath, move); err != nil {
+		return err
 	}
-	return os.Symlink(target, linkPath)
+	return fsutil.ForceSymlink(sharedPath, linkPath)
 }
 
 func moveOrCopy(src, dst string, move bool) error {
 	if move {
 		return os.Rename(src, dst)
 	}
-	return copyPath(src, dst)
-}
-
-func copyPath(src, dst string) error {
-	info, err := os.Stat(src)
-	if err != nil {
-		return err
-	}
-	if info.IsDir() {
-		if err := os.MkdirAll(dst, info.Mode().Perm()); err != nil {
-			return err
-		}
-		children, err := os.ReadDir(src)
-		if err != nil {
-			return err
-		}
-		for _, c := range children {
-			if err := copyPath(filepath.Join(src, c.Name()), filepath.Join(dst, c.Name())); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode().Perm())
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-	_, err = io.Copy(out, in)
-	return err
+	return fsutil.CopyTree(src, dst)
 }
 
 func SelectExportMaterial(profileDir string, reg *Registry, mode ExportMode) ([]Entry, error) {

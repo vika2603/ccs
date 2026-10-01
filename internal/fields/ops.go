@@ -3,13 +3,11 @@ package fields
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 
+	"github.com/vika2603/ccs/internal/fsutil"
 	"github.com/vika2603/ccs/internal/layout"
-	"github.com/vika2603/ccs/internal/link"
-	"github.com/vika2603/ccs/internal/tui"
 )
 
 type LinkState int
@@ -51,17 +49,27 @@ func (o Ops) Fork(profile, field string) error {
 	if target != sharedPath {
 		return fmt.Errorf("symlink points to %q, not the expected shared path %q", target, sharedPath)
 	}
-	kind, err := detectKind(sharedPath)
+	// Copy into a staging directory first so a failed copy leaves the
+	// symlink in place instead of a missing or partial field.
+	staging, err := os.MkdirTemp(profileDir, ".ccs-fork-")
 	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(staging)
+	staged := filepath.Join(staging, field)
+	if err := fsutil.CopyTree(sharedPath, staged); err != nil {
 		return err
 	}
 	if err := os.Remove(linkPath); err != nil {
 		return err
 	}
-	return CopyByKind(sharedPath, linkPath, kind)
+	if err := os.Rename(staged, linkPath); err != nil {
+		return errors.Join(err, os.Symlink(sharedPath, linkPath))
+	}
+	return nil
 }
 
-func (o Ops) Share(profile, field string, out io.Writer, in io.Reader) error {
+func (o Ops) Share(profile, field string, onConflict ConflictFunc) error {
 	if _, ok := o.registry.lookupShared(field); !ok {
 		return fmt.Errorf("field %q is not configured as shared", field)
 	}
@@ -76,39 +84,29 @@ func (o Ops) Share(profile, field string, out io.Writer, in io.Reader) error {
 	if info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("%q is already linked to shared; nothing to share", linkPath)
 	}
-	kind, err := detectKind(linkPath)
+	empty, err := fsutil.IsEmpty(sharedPath)
 	if err != nil {
 		return err
 	}
-	nonEmpty, err := sharedHasContent(sharedPath)
-	if err != nil {
-		return err
-	}
-	if nonEmpty {
-		res, err := tui.PromptConflict(
-			tui.Entry{Name: field, Path: sharedPath},
-			tui.Entry{Name: field, Path: linkPath},
-			out, in,
-		)
+	if !empty {
+		overwrite, err := onConflict(field, sharedPath, linkPath)
 		if err != nil {
 			return err
 		}
-		if res != tui.ResolveOverwrite {
+		if !overwrite {
 			return errors.New("share aborted due to conflict")
 		}
-		if err := os.RemoveAll(sharedPath); err != nil {
-			return err
-		}
-	} else {
-		_ = os.RemoveAll(sharedPath)
 	}
-	if err := CopyByKind(linkPath, sharedPath, kind); err != nil {
+	if err := os.RemoveAll(sharedPath); err != nil {
+		return err
+	}
+	if err := fsutil.CopyTree(linkPath, sharedPath); err != nil {
 		return err
 	}
 	if err := os.RemoveAll(linkPath); err != nil {
 		return err
 	}
-	return link.EnsureSymlink(sharedPath, linkPath)
+	return fsutil.EnsureSymlink(sharedPath, linkPath)
 }
 
 func (o Ops) Relink(profile, field string) error {
@@ -147,29 +145,7 @@ func (o Ops) Relink(profile, field string) error {
 	if err := os.MkdirAll(profileDir, 0o755); err != nil {
 		return err
 	}
-	return link.EnsureSymlink(sharedPath, linkPath)
-}
-
-func (o Ops) RelinkAll(profile string) ([]string, error) {
-	var relinked []string
-	for _, c := range o.registry.Shared() {
-		linkPath := filepath.Join(o.paths.ProfilePath(profile), c.Name)
-		info, err := os.Lstat(linkPath)
-		if err == nil && info.Mode()&os.ModeSymlink != 0 {
-			continue
-		}
-		if err == nil {
-			continue
-		}
-		if !errors.Is(err, os.ErrNotExist) {
-			return relinked, err
-		}
-		if err := o.Relink(profile, c.Name); err != nil {
-			return relinked, err
-		}
-		relinked = append(relinked, c.Name)
-	}
-	return relinked, nil
+	return fsutil.EnsureSymlink(sharedPath, linkPath)
 }
 
 func (o Ops) Status(profile string) (map[string]LinkState, error) {
@@ -193,48 +169,4 @@ func (o Ops) Status(profile string) (map[string]LinkState, error) {
 func (r *Registry) lookupShared(name string) (Classification, bool) {
 	c, ok := r.shared[name]
 	return c, ok
-}
-
-func sharedHasContent(path string) (bool, error) {
-	info, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	if info.IsDir() {
-		entries, err := os.ReadDir(path)
-		if err != nil {
-			return false, err
-		}
-		return len(entries) > 0, nil
-	}
-	return info.Size() > 0, nil
-}
-
-func CopyByKind(src, dst string, kind Kind) error {
-	switch kind {
-	case KindFile:
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return err
-		}
-		return copyPath(src, dst)
-	case KindDir:
-		if err := os.MkdirAll(dst, 0o755); err != nil {
-			return err
-		}
-		children, err := os.ReadDir(src)
-		if err != nil {
-			return err
-		}
-		for _, e := range children {
-			if err := copyPath(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())); err != nil {
-				return err
-			}
-		}
-		return nil
-	default:
-		return fmt.Errorf("unknown kind %v", kind)
-	}
 }

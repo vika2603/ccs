@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -13,9 +12,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/vika2603/ccs/internal/archive"
-	"github.com/vika2603/ccs/internal/creds"
+	"github.com/vika2603/ccs/internal/fsutil"
 	"github.com/vika2603/ccs/internal/layout"
-	"github.com/vika2603/ccs/internal/state"
 )
 
 var restorePlatformOverride = runtime.GOOS
@@ -29,7 +27,9 @@ func newRestoreCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			src := args[0]
-			p, err := layout.FromEnv()
+			// Only paths and the credential store are needed; skipping
+			// config.toml keeps recovery possible when it is unreadable.
+			a, err := loadPaths()
 			if err != nil {
 				return err
 			}
@@ -51,22 +51,22 @@ func newRestoreCmd() *cobra.Command {
 				return fmt.Errorf("archive platform %q does not match current platform %q; cross-platform restore is not supported yet", m.SourcePlatform, restorePlatformOverride)
 			}
 
-			if err := os.MkdirAll(p.Root(), 0o755); err != nil {
+			if err := os.MkdirAll(a.Root(), 0o755); err != nil {
 				return err
 			}
 
 			slots := []restoreSlot{}
 			if _, err := os.Stat(filepath.Join(tmp, "config.toml")); err == nil {
-				slots = append(slots, restoreSlot{filepath.Join(tmp, "config.toml"), p.ConfigFile()})
+				slots = append(slots, restoreSlot{filepath.Join(tmp, "config.toml"), a.ConfigFile()})
 			}
 
-			if err := collectChildrenAsSlots(filepath.Join(tmp, "shared"), p.SharedDir(), &slots); err != nil {
+			if err := collectChildrenAsSlots(filepath.Join(tmp, "shared"), a.SharedDir(), &slots); err != nil {
 				return err
 			}
-			if err := collectChildrenAsSlots(filepath.Join(tmp, "profiles"), p.ProfilesDir(), &slots); err != nil {
+			if err := collectChildrenAsSlots(filepath.Join(tmp, "profiles"), a.ProfilesDir(), &slots); err != nil {
 				return err
 			}
-			if err := collectChildrenAsSlots(filepath.Join(tmp, "env"), p.EnvDir(), &slots); err != nil {
+			if err := collectChildrenAsSlots(filepath.Join(tmp, "env"), a.EnvDir(), &slots); err != nil {
 				return err
 			}
 
@@ -87,7 +87,7 @@ func newRestoreCmd() *cobra.Command {
 				if err := os.RemoveAll(s.dst); err != nil {
 					return err
 				}
-				if err := copyPathTree(s.src, s.dst); err != nil {
+				if err := fsutil.CopyTreeNoFollow(s.src, s.dst); err != nil {
 					return err
 				}
 			}
@@ -110,21 +110,24 @@ func newRestoreCmd() *cobra.Command {
 				if err := json.Unmarshal(plain, &bundle); err != nil {
 					return fmt.Errorf("parse credentials bundle: %w", err)
 				}
-				store := creds.New()
 				for name, b64 := range bundle {
+					if err := layout.ValidName(name); err != nil {
+						fmt.Fprintf(cmd.ErrOrStderr(), "warning: skip credentials: %v\n", err)
+						continue
+					}
 					blob, err := base64.StdEncoding.DecodeString(b64)
 					if err != nil {
 						fmt.Fprintf(cmd.ErrOrStderr(), "warning: decode credentials for %q: %v\n", name, err)
 						continue
 					}
-					if err := store.Write(p.ProfilePath(name), blob); err != nil {
+					if err := a.creds.Write(a.ProfilePath(name), blob); err != nil {
 						fmt.Fprintf(cmd.ErrOrStderr(), "warning: write credentials for %q: %v\n", name, err)
 					}
 				}
 			}
 
 			if !noActive && m.Active != "" {
-				if err := state.Write(p.ActiveFile(), m.Active); err != nil {
+				if err := a.SetActive(m.Active); err != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "warning: set active profile %q: %v\n", m.Active, err)
 				}
 			}
@@ -160,47 +163,4 @@ func collectChildrenAsSlots(srcDir, dstDir string, out *[]restoreSlot) error {
 		})
 	}
 	return nil
-}
-
-// copyPathTree copies src to dst, preserving symlinks (not dereferenced) and
-// file modes. Intended for moving a freshly unpacked tree into ~/.ccs.
-func copyPathTree(src, dst string) error {
-	info, err := os.Lstat(src)
-	if err != nil {
-		return err
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		target, err := os.Readlink(src)
-		if err != nil {
-			return err
-		}
-		return os.Symlink(target, dst)
-	}
-	if info.IsDir() {
-		if err := os.MkdirAll(dst, info.Mode().Perm()); err != nil {
-			return err
-		}
-		entries, err := os.ReadDir(src)
-		if err != nil {
-			return err
-		}
-		for _, e := range entries {
-			if err := copyPathTree(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode().Perm())
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-	_, err = io.Copy(out, in)
-	return err
 }

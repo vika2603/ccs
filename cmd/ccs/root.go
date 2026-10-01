@@ -14,47 +14,42 @@ func newRootCmd() *cobra.Command {
 		Short:             "Claude Code profile switcher (bare `ccs` or `ccs <profile>` launches claude)",
 		SilenceUsage:      true,
 		SilenceErrors:     true,
+		Version:           Version,
 		Args:              cobra.ArbitraryArgs,
 		ValidArgsFunction: completeProfileNamesAtArg0,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) == 0 {
-				name, err := activeProfileName()
-				if err != nil {
+			a, err := loadApp()
+			if err != nil {
+				return err
+			}
+			name, rest := splitProfileArgs(args)
+			if name == "" {
+				if name, err = a.profileOrActive(""); err != nil {
 					cmd.Println(err)
 					cmd.Println()
 					return cmd.Help()
 				}
-				return runClaudeForProfile(name, nil)
 			}
-			name := args[0]
-			claudeArgs := args[1:]
-			if len(claudeArgs) > 0 && claudeArgs[0] == "--" {
-				claudeArgs = claudeArgs[1:]
+			if len(rest) > 0 {
+				rest = append(a.launchCommand(nil), rest...)
 			}
-			if len(claudeArgs) == 0 {
-				return runClaudeForProfile(name, nil)
-			}
-			_, p, err := manager()
-			if err != nil {
-				return err
-			}
-			return runClaudeForProfile(name, append(defaultCommand(p, nil), claudeArgs...))
+			return a.launch(name, rest)
 		},
 	}
 	root.SetOut(os.Stdout)
 	root.SetErr(os.Stderr)
 	root.Flags().SetInterspersed(false)
-	root.AddCommand(newVersionCmd())
+	root.SetVersionTemplate("ccs {{.Version}}\n")
 	root.AddCommand(newInitCmd(), newNewCmd(), newLsCmd(), newPathCmd(), newRmCmd(), newMvCmd(), newCloneCmd())
-	root.AddCommand(newShellInitCmd(), newUseCmd(), newUnuseCmd(), newInternalShellUseCmd(), newInternalShellUnuseCmd(), newInternalShellHookCmd())
-	root.AddCommand(newRunCmd(), newInstallShimCmd(), newInternalShimExecCmd())
-	root.AddCommand(newForkCmd(), newShareCmd(), newRelinkCmd(), newClassifyCmd(), newStatusCmd())
+	root.AddCommand(newShellInitCmd(), newUseCmd(), newUnuseCmd())
+	root.AddCommand(newRunCmd(), newInternalShimExecCmd())
+	root.AddCommand(newForkCmd(), newShareCmd(), newClassifyCmd(), newStatusCmd())
 	root.AddCommand(newAdoptCmd())
 	root.AddCommand(newImportCmd())
 	root.AddCommand(newExportCmd())
 	root.AddCommand(newBackupCmd())
 	root.AddCommand(newRestoreCmd())
-	root.AddCommand(newDoctorCmd(), newKeychainCmd())
+	root.AddCommand(newDoctorCmd())
 	root.AddCommand(newEnvCmd())
 	return root
 }

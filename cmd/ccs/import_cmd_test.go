@@ -62,3 +62,33 @@ func TestImportRefusesCrossPlatform(t *testing.T) {
 		t.Fatal(mErr)
 	}
 }
+
+func TestImportRejectsUnsafeManifestProfileName(t *testing.T) {
+	home := t.TempDir()
+	runCmd(t, home, "init")
+	victim := filepath.Join(home, ".ccs", "escape")
+	if err := os.MkdirAll(victim, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	archivePath := filepath.Join(t.TempDir(), "evil.tar.gz")
+	buf := &bytes.Buffer{}
+	gz := gzip.NewWriter(buf)
+	m := archive.Manifest{Profile: "../escape", SourcePlatform: importPlatformOverride}
+	if err := archive.WriteMinimalManifestTar(gz, m); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(archivePath, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runCmd(t, home, "import", "--force", archivePath); err == nil {
+		t.Fatal("expected import to reject manifest profile name ../escape")
+	}
+	if _, err := os.Stat(victim); err != nil {
+		t.Errorf("directory outside profiles/ was touched: %v", err)
+	}
+}

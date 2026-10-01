@@ -11,9 +11,9 @@ import (
 func TestDescribeIncludesCategoryAndKind(t *testing.T) {
 	r := NewRegistry(config.Default())
 	cases := map[string]Classification{
-		"skills":            {Name: "skills", Category: Shared, Kind: KindDir},
-		"CLAUDE.md":         {Name: "CLAUDE.md", Category: Shared, Kind: KindFile},
-		"settings.json":     {Name: "settings.json", Category: Shared, Kind: KindFile},
+		"skills":                    {Name: "skills", Category: Shared, Kind: KindDir},
+		"CLAUDE.md":                 {Name: "CLAUDE.md", Category: Shared, Kind: KindFile},
+		"settings.json":             {Name: "settings.json", Category: Shared, Kind: KindFile},
 		"projects":                  {Name: "projects", Category: Isolated, Kind: KindDir},
 		".credentials.json":         {Name: ".credentials.json", Category: Isolated, Kind: KindFile},
 		".claude.json":              {Name: ".claude.json", Category: Isolated, Kind: KindFile},

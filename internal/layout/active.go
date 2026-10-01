@@ -1,4 +1,4 @@
-package state
+package layout
 
 import (
 	"context"
@@ -32,7 +32,7 @@ func ValidName(name string) error {
 	return nil
 }
 
-func Read(path string) (string, error) {
+func readActive(path string) (string, error) {
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", nil
@@ -45,7 +45,7 @@ func Read(path string) (string, error) {
 
 func acquire(lockPath string) (*flock.Flock, error) {
 	lock := flock.New(lockPath)
-	for attempt := 0; attempt < 2; attempt++ {
+	for range 2 {
 		ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 		ok, err := lock.TryLockContext(ctx, 100*time.Millisecond)
 		cancel()
@@ -59,22 +59,18 @@ func acquire(lockPath string) (*flock.Flock, error) {
 	return nil, fmt.Errorf("timed out acquiring state lock %s", lockPath)
 }
 
-func Write(path, name string) error {
+func writeActive(path, name string) error {
 	if err := ValidName(name); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	lock, err := acquire(path + ".lock")
-	if err != nil {
-		return err
-	}
-	defer lock.Unlock()
-	return os.WriteFile(path, []byte(name+"\n"), 0o644)
+	return writeLocked(path, []byte(name+"\n"))
 }
 
-func Clear(path string) error {
+func clearActive(path string) error {
+	return writeLocked(path, nil)
+}
+
+func writeLocked(path string, data []byte) (err error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -82,6 +78,15 @@ func Clear(path string) error {
 	if err != nil {
 		return err
 	}
-	defer lock.Unlock()
-	return os.WriteFile(path, nil, 0o644)
+	defer func() { err = errors.Join(err, lock.Unlock()) }()
+	return os.WriteFile(path, data, 0o644)
 }
+
+// Active returns the active profile name, or "" when none is set.
+func (p Paths) Active() (string, error) { return readActive(p.ActiveFile()) }
+
+// SetActive records name as the active profile.
+func (p Paths) SetActive(name string) error { return writeActive(p.ActiveFile(), name) }
+
+// ClearActive unsets the active profile.
+func (p Paths) ClearActive() error { return clearActive(p.ActiveFile()) }

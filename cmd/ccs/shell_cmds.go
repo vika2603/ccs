@@ -1,30 +1,47 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
-
-	"github.com/vika2603/ccs/internal/profileenv"
-	"github.com/vika2603/ccs/internal/shell"
-	"github.com/vika2603/ccs/internal/state"
 )
 
+// newShellInitCmd keeps `eval "$(ccs shell-init)"` lines in existing rc files
+// working. Profile switching is handled entirely by the ~/.ccs/bin/claude
+// shim, so the only thing left to install in the shell is tab completion.
 func newShellInitCmd() *cobra.Command {
 	var kind string
 	cmd := &cobra.Command{
-		Use:   "shell-init",
-		Short: "Print shell integration code",
+		Use:    "shell-init",
+		Short:  "Print shell completion code (same as `ccs completion <shell>`)",
+		Hidden: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			s := shell.Zsh
-			if kind == "bash" {
-				s = shell.Bash
-			} else if kind == "" {
-				s = shell.Detect(os.Getenv("SHELL"))
+			if kind == "" {
+				kind = "zsh"
+				if strings.Contains(filepath.Base(os.Getenv("SHELL")), "bash") {
+					kind = "bash"
+				}
 			}
-			fmt.Fprint(cmd.OutOrStdout(), shell.Render(s))
-			return nil
+			root := cmd.Root()
+			switch kind {
+			case "zsh":
+				// The script calls compdef, which only exists after compinit;
+				// skip registration instead of erroring on every shell start.
+				var buf bytes.Buffer
+				if err := root.GenZshCompletion(&buf); err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "if (( $+functions[compdef] )); then\n%s\nfi\n", buf.String())
+				return nil
+			case "bash":
+				return root.GenBashCompletionV2(cmd.OutOrStdout(), true)
+			default:
+				return fmt.Errorf("unsupported shell %q; use zsh or bash", kind)
+			}
 		},
 	}
 	cmd.Flags().StringVar(&kind, "shell", "", "override detected shell (zsh|bash)")
@@ -34,18 +51,18 @@ func newShellInitCmd() *cobra.Command {
 func newUseCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:               "use <name>",
-		Short:             "Switch active profile",
+		Short:             "Switch the active profile used by `claude`",
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: completeProfileNamesAtArg0,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			m, p, err := manager()
+			a, err := loadApp()
 			if err != nil {
 				return err
 			}
-			if _, err := m.Path(args[0]); err != nil {
+			if _, err := a.mgr.Path(args[0]); err != nil {
 				return err
 			}
-			return state.Write(p.ActiveFile(), args[0])
+			return a.SetActive(args[0])
 		},
 	}
 }
@@ -56,125 +73,11 @@ func newUnuseCmd() *cobra.Command {
 		Short: "Deactivate the current profile",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			_, p, err := manager()
+			a, err := loadApp()
 			if err != nil {
 				return err
 			}
-			return state.Clear(p.ActiveFile())
-		},
-	}
-}
-
-func newInternalShellUseCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:    "__shell_use <name>",
-		Hidden: true,
-		Args:   cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			m, p, err := manager()
-			if err != nil {
-				return err
-			}
-			name := args[0]
-			path, err := m.Path(name)
-			if err != nil {
-				return err
-			}
-			envFile := p.EnvFile(name)
-			penv, err := profileenv.Load(envFile)
-			if err != nil {
-				return err
-			}
-			if err := state.Write(p.ActiveFile(), name); err != nil {
-				return err
-			}
-			out := profileenv.Render(profileenv.Action{
-				Set:       penv.Env,
-				ConfigDir: path,
-				Sig:       profileenv.Signature(name, envFile),
-			})
-			fmt.Fprint(cmd.OutOrStdout(), out)
-			return nil
-		},
-	}
-}
-
-func newInternalShellUnuseCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:    "__shell_unuse",
-		Hidden: true,
-		Args:   cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			_, p, err := manager()
-			if err != nil {
-				return err
-			}
-			if err := state.Clear(p.ActiveFile()); err != nil {
-				return err
-			}
-			fmt.Fprint(cmd.OutOrStdout(), profileenv.RenderClearAll())
-			return nil
-		},
-	}
-}
-
-// newInternalShellHookCmd implements the `ccs __shell_hook` command called by
-// the prompt hook (see internal/shell.zshSnippet). It prints shell code that,
-// when eval'd, brings the shell's env in line with the active profile. If the
-// shell is already in sync (CCS_ENV_SIG matches), it prints nothing.
-func newInternalShellHookCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:    "__shell_hook",
-		Hidden: true,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			m, p, err := manager()
-			if err != nil {
-				// Hook runs on every prompt; don't surface errors to the user.
-				return nil
-			}
-			active, _ := state.Read(p.ActiveFile())
-			// If state points at a missing profile directory, treat as no active.
-			var profilePath string
-			if active != "" {
-				dir, perr := m.Path(active)
-				if perr != nil {
-					active = ""
-				} else {
-					profilePath = dir
-				}
-			}
-
-			haveCCD := os.Getenv("CLAUDE_CONFIG_DIR")
-			haveManagedCCD := os.Getenv("CCS_MANAGED_CCD")
-			// User owns CLAUDE_CONFIG_DIR. Treat as "opted out" and skip env sync
-			// too - syncing envs while ignoring the user's CCD choice would be a
-			// half-sync that surprises more than it helps.
-			if haveCCD != "" && haveManagedCCD == "" {
-				return nil
-			}
-
-			envFile := p.EnvFile(active)
-			wantSig := profileenv.Signature(active, envFile)
-			if os.Getenv("CCS_ENV_SIG") == wantSig {
-				return nil
-			}
-
-			if active == "" {
-				fmt.Fprint(cmd.OutOrStdout(), profileenv.RenderClearManaged())
-				return nil
-			}
-
-			penv, err := profileenv.Load(envFile)
-			if err != nil {
-				return nil
-			}
-			out := profileenv.Render(profileenv.Action{
-				Set:       penv.Env,
-				ConfigDir: profilePath,
-				Sig:       wantSig,
-			})
-			fmt.Fprint(cmd.OutOrStdout(), out)
-			return nil
+			return a.ClearActive()
 		},
 	}
 }

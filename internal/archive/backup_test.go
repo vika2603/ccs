@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -174,11 +175,11 @@ func TestBackupRoundTrip(t *testing.T) {
 	}
 }
 
-// writeMaliciousBackup crafts a gzipped tar whose first entry carries the
-// provided header and optional body. A BackupManifest entry is appended so
-// UnpackBackup has a reason to keep reading until the malicious header is
+// writeMaliciousArchive crafts a gzipped tar whose first entry carries the
+// provided header and optional body. A manifest entry is appended so the
+// extractor has a reason to keep reading until the malicious header is
 // processed.
-func writeMaliciousBackup(t *testing.T, path string, h tar.Header, body []byte) {
+func writeMaliciousArchive(t *testing.T, path, manifestName string, manifest any, h tar.Header, body []byte) {
 	t.Helper()
 	f, err := os.Create(path)
 	if err != nil {
@@ -199,70 +200,63 @@ func writeMaliciousBackup(t *testing.T, path string, h tar.Header, body []byte) 
 			t.Fatal(err)
 		}
 	}
-	manifest := BackupManifest{Version: 1, Type: BackupType, SourcePlatform: runtime.GOOS}
-	b, _ := json.Marshal(manifest)
-	mh := tar.Header{
-		Name:     BackupManifestName,
-		Mode:     0o644,
-		Size:     int64(len(b)),
-		Typeflag: tar.TypeReg,
-		ModTime:  time.Unix(0, 0),
-	}
-	if err := tw.WriteHeader(&mh); err != nil {
+	b, err := json.Marshal(manifest)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tw.Write(b); err != nil {
+	if err := writeTarBytes(tw, manifestName, b); err != nil {
 		t.Fatal(err)
 	}
 }
 
+var traversalCases = []struct {
+	name   string
+	header tar.Header
+	body   []byte
+}{
+	{
+		name: "dotdot-regular",
+		header: tar.Header{
+			Name:     "../escape.txt",
+			Mode:     0o644,
+			Size:     5,
+			Typeflag: tar.TypeReg,
+		},
+		body: []byte("pwned"),
+	},
+	{
+		name: "absolute-regular",
+		header: tar.Header{
+			Name:     "/tmp/escape.txt",
+			Mode:     0o644,
+			Size:     5,
+			Typeflag: tar.TypeReg,
+		},
+		body: []byte("pwned"),
+	},
+	{
+		name: "symlink-relative-escape",
+		header: tar.Header{
+			Name:     "link",
+			Typeflag: tar.TypeSymlink,
+			Linkname: "../../outside",
+		},
+	},
+	{
+		name: "symlink-absolute-escape",
+		header: tar.Header{
+			Name:     "link",
+			Typeflag: tar.TypeSymlink,
+			Linkname: "/etc/passwd",
+		},
+	},
+}
+
 func TestUnpackBackupRejectsTraversal(t *testing.T) {
-	cases := []struct {
-		name   string
-		header tar.Header
-		body   []byte
-	}{
-		{
-			name: "dotdot-regular",
-			header: tar.Header{
-				Name:     "../escape.txt",
-				Mode:     0o644,
-				Size:     5,
-				Typeflag: tar.TypeReg,
-			},
-			body: []byte("pwned"),
-		},
-		{
-			name: "absolute-regular",
-			header: tar.Header{
-				Name:     "/tmp/escape.txt",
-				Mode:     0o644,
-				Size:     5,
-				Typeflag: tar.TypeReg,
-			},
-			body: []byte("pwned"),
-		},
-		{
-			name: "symlink-relative-escape",
-			header: tar.Header{
-				Name:     "link",
-				Typeflag: tar.TypeSymlink,
-				Linkname: "../../outside",
-			},
-		},
-		{
-			name: "symlink-absolute-escape",
-			header: tar.Header{
-				Name:     "link",
-				Typeflag: tar.TypeSymlink,
-				Linkname: "/etc/passwd",
-			},
-		},
-	}
-	for _, tc := range cases {
+	for _, tc := range traversalCases {
 		t.Run(tc.name, func(t *testing.T) {
 			tarPath := filepath.Join(t.TempDir(), "bad.tar.gz")
-			writeMaliciousBackup(t, tarPath, tc.header, tc.body)
+			writeMaliciousArchive(t, tarPath, BackupManifestName, BackupManifest{Version: 1, Type: BackupType, SourcePlatform: runtime.GOOS}, tc.header, tc.body)
 			dst := t.TempDir()
 			_, err := UnpackBackup(tarPath, dst)
 			if err == nil {
@@ -278,5 +272,51 @@ func TestUnpackBackupRejectsTraversal(t *testing.T) {
 				t.Errorf("file written outside dest: %s", outside)
 			}
 		})
+	}
+}
+
+// A link entry placed beneath an earlier symlink is created somewhere other
+// than its archive path says, so its target must not be checked lexically.
+func TestUnpackBackupRejectsEntriesBeneathSymlink(t *testing.T) {
+	tarPath := filepath.Join(t.TempDir(), "nested.tar.gz")
+	f, err := os.Create(tarPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gz := gzip.NewWriter(f)
+	tw := tar.NewWriter(gz)
+	for _, h := range []tar.Header{
+		{Name: "profile/", Typeflag: tar.TypeDir, Mode: 0o755},
+		{Name: "d1/", Typeflag: tar.TypeDir, Mode: 0o755},
+		{Name: "d1/d2", Typeflag: tar.TypeSymlink, Linkname: "../profile"},
+		{Name: "d1/d2/leak", Typeflag: tar.TypeSymlink, Linkname: "../../secret.txt"},
+	} {
+		if err := tw.WriteHeader(&h); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b, _ := json.Marshal(BackupManifest{Version: 1, Type: BackupType})
+	if err := writeTarBytes(tw, BackupManifestName, b); err != nil {
+		t.Fatal(err)
+	}
+	if err := errors.Join(tw.Close(), gz.Close(), f.Close()); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := t.TempDir()
+	if _, err := UnpackBackup(tarPath, dst); err == nil {
+		t.Fatal("expected entry beneath a symlink to be rejected")
+	}
+	if _, err := os.Lstat(filepath.Join(dst, "profile", "leak")); err == nil {
+		t.Error("symlink pointing outside dest was created")
+	}
+}
+
+func TestUnpackRejectsSymlinkEntries(t *testing.T) {
+	tarPath := filepath.Join(t.TempDir(), "link.tar.gz")
+	writeMaliciousArchive(t, tarPath, "manifest.json", Manifest{Profile: "work"},
+		tar.Header{Name: "profile/self", Typeflag: tar.TypeSymlink, Linkname: "."}, nil)
+	if _, err := Unpack(tarPath, t.TempDir()); err == nil {
+		t.Fatal("export archives never contain symlinks; Unpack should reject them")
 	}
 }

@@ -2,18 +2,19 @@ package main
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 )
 
-func TestVersionCommand(t *testing.T) {
+func TestVersionFlag(t *testing.T) {
 	var buf bytes.Buffer
 	cmd := newRootCmd()
 	cmd.SetOut(&buf)
-	cmd.SetArgs([]string{"version"})
+	cmd.SetArgs([]string{"--version"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	if got := buf.String(); got == "" {
-		t.Fatalf("empty output")
+	if got := buf.String(); !strings.HasPrefix(got, "ccs ") {
+		t.Fatalf("unexpected output %q", got)
 	}
 }

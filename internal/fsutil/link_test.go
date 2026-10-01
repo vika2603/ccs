@@ -1,4 +1,4 @@
-package link
+package fsutil
 
 import (
 	"os"
@@ -37,44 +37,7 @@ func TestEnsureSymlinkReplacesExisting(t *testing.T) {
 	}
 }
 
-func TestIsSymlinkTo(t *testing.T) {
-	dir := t.TempDir()
-	target := filepath.Join(dir, "target")
-	os.Mkdir(target, 0o755)
-	link := filepath.Join(dir, "link")
-	os.Symlink(target, link)
-	ok, err := IsSymlinkTo(link, target)
-	if err != nil || !ok {
-		t.Errorf("expected symlink to match: %v", err)
-	}
-}
-
-func TestReplaceSymlinkWithCopy(t *testing.T) {
-	dir := t.TempDir()
-	src := filepath.Join(dir, "src")
-	os.MkdirAll(filepath.Join(src, "sub"), 0o755)
-	os.WriteFile(filepath.Join(src, "a.txt"), []byte("hello"), 0o644)
-	os.WriteFile(filepath.Join(src, "sub", "b.txt"), []byte("world"), 0o644)
-	link := filepath.Join(dir, "link")
-	os.Symlink(src, link)
-
-	if err := ReplaceSymlinkWithCopy(link); err != nil {
-		t.Fatalf("replace: %v", err)
-	}
-	info, err := os.Lstat(link)
-	if err != nil {
-		t.Fatalf("lstat: %v", err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		t.Fatalf("link should no longer be a symlink")
-	}
-	b, _ := os.ReadFile(filepath.Join(link, "sub", "b.txt"))
-	if string(b) != "world" {
-		t.Errorf("copy contents mismatch: %q", b)
-	}
-}
-
-func TestReplaceCopyWithSymlink(t *testing.T) {
+func TestForceSymlinkReplacesRealCopy(t *testing.T) {
 	dir := t.TempDir()
 	real := filepath.Join(dir, "real")
 	os.MkdirAll(real, 0o755)
@@ -82,7 +45,7 @@ func TestReplaceCopyWithSymlink(t *testing.T) {
 	target := filepath.Join(dir, "target")
 	os.Mkdir(target, 0o755)
 
-	if err := ReplaceCopyWithSymlink(real, target); err != nil {
+	if err := ForceSymlink(target, real); err != nil {
 		t.Fatalf("replace: %v", err)
 	}
 	info, err := os.Lstat(real)
@@ -95,5 +58,27 @@ func TestReplaceCopyWithSymlink(t *testing.T) {
 	resolved, _ := os.Readlink(real)
 	if resolved != target {
 		t.Errorf("target mismatch: %q", resolved)
+	}
+}
+
+func TestIsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	emptyDir := filepath.Join(dir, "empty")
+	os.Mkdir(emptyDir, 0o755)
+	emptyFile := filepath.Join(dir, "empty.md")
+	os.WriteFile(emptyFile, nil, 0o644)
+	full := filepath.Join(dir, "full.md")
+	os.WriteFile(full, []byte("x"), 0o644)
+	for path, want := range map[string]bool{
+		filepath.Join(dir, "missing"): true,
+		emptyDir:                      true,
+		emptyFile:                     true,
+		full:                          false,
+		dir:                           false,
+	} {
+		got, err := IsEmpty(path)
+		if err != nil || got != want {
+			t.Errorf("IsEmpty(%s) = %v, %v; want %v", path, got, err, want)
+		}
 	}
 }

@@ -1,4 +1,4 @@
-package runx
+package profileenv
 
 import (
 	"fmt"
@@ -13,8 +13,10 @@ import (
 // profileEnv entries overlaid on top of any same-named entries already present.
 // profileEnv may be nil.
 func BuildEnv(env []string, configDir string, profileEnv map[string]string) []string {
-	override := make(map[string]struct{}, len(profileEnv)+1)
+	override := make(map[string]struct{}, len(profileEnv)+2)
 	override["CLAUDE_CONFIG_DIR"] = struct{}{}
+	// Dropped so the shim treats the CLAUDE_CONFIG_DIR set here as explicit.
+	override["CCS_MANAGED_CCD"] = struct{}{}
 	for k := range profileEnv {
 		override[k] = struct{}{}
 	}
@@ -42,11 +44,7 @@ func BuildEnv(env []string, configDir string, profileEnv map[string]string) []st
 	return out
 }
 
-func Resolve(argv []string) (string, error) {
-	return ResolveSkipping(argv, nil)
-}
-
-// ResolveSkipping is like Resolve but walks $PATH manually and ignores any
+// ResolveSkipping resolves argv[0] like exec.LookPath but ignores any $PATH
 // entries whose absolute form matches one of skipDirs. Used to keep `ccs run`
 // from picking up its own shim at ~/.ccs/bin/claude when resolving "claude".
 //
@@ -101,4 +99,3 @@ func isExecutable(path string) bool {
 	}
 	return info.Mode().Perm()&0o111 != 0
 }
-

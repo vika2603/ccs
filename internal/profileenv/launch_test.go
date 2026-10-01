@@ -1,4 +1,4 @@
-package runx
+package profileenv
 
 import (
 	"os"
@@ -74,7 +74,7 @@ func TestResolveExecutable(t *testing.T) {
 	if err != nil {
 		t.Skip("no executable info")
 	}
-	got, err := Resolve([]string{path})
+	got, err := ResolveSkipping([]string{path}, nil)
 	if err != nil || got != path {
 		t.Errorf("got %q err %v", got, err)
 	}
@@ -98,7 +98,7 @@ func TestResolveSkippingSkipsShimDir(t *testing.T) {
 	os.Setenv("PATH", shimDir+":"+realDir)
 
 	// Without skip: resolves to shim (first hit).
-	got, err := Resolve([]string{"widget"})
+	got, err := ResolveSkipping([]string{"widget"}, nil)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}

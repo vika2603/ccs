@@ -44,5 +44,5 @@ tar -xzf "$tmp/$archive" -C "$tmp"
 mkdir -p "$prefix"
 install -m 0755 "$tmp/ccs" "$prefix/ccs"
 echo "installed $prefix/ccs"
-echo "add this to your shell rc:"
-echo '    eval "$(ccs shell-init)"'
+echo "next: run 'ccs init', then put ~/.ccs/bin first on PATH in ~/.zprofile:"
+echo '    export PATH="$HOME/.ccs/bin:$PATH"'

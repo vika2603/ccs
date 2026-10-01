@@ -11,11 +11,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/vika2603/ccs/internal/config"
 	"github.com/vika2603/ccs/internal/creds"
 	"github.com/vika2603/ccs/internal/fields"
 	"github.com/vika2603/ccs/internal/layout"
-	"github.com/vika2603/ccs/internal/state"
 	"github.com/vika2603/ccs/internal/tui"
 )
 
@@ -27,23 +25,18 @@ func newAdoptCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			src, name := args[0], args[1]
-			if err := state.ValidName(name); err != nil {
+			if err := layout.ValidName(name); err != nil {
 				return err
 			}
-			p, err := layout.FromEnv()
+			a, err := loadApp()
 			if err != nil {
 				return err
 			}
-			cfg, err := config.Load(p.ConfigFile())
-			if err != nil {
-				return err
-			}
-			reg := fields.NewRegistry(cfg)
 
 			if _, err := os.Stat(src); err != nil {
 				return err
 			}
-			dst := p.ProfilePath(name)
+			dst := a.ProfilePath(name)
 			if _, err := os.Stat(dst); err == nil {
 				return fmt.Errorf("profile %q already exists", name)
 			} else if !errors.Is(err, os.ErrNotExist) {
@@ -59,13 +52,21 @@ func newAdoptCmd() *cobra.Command {
 				in:  in,
 				err: cmd.ErrOrStderr(),
 			}
-			if err := fields.ImportEntries(src, dst, p.SharedDir(), reg, prompter, move); err != nil {
+			if err := fields.ImportEntries(src, dst, a.SharedDir(), a.reg, prompter, move); err != nil {
 				return err
+			}
+			// Link the shared fields the source lacked, as `ccs new` would.
+			for _, s := range a.reg.Shared() {
+				if _, err := os.Lstat(filepath.Join(dst, s.Name)); errors.Is(err, os.ErrNotExist) {
+					if err := a.ops().Relink(name, s.Name); err != nil {
+						return err
+					}
+				}
 			}
 			if err := maybeImportClaudeJSON(src, dst, name, in, cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
 				return err
 			}
-			return maybeImportCreds(src, dst, name, move, creds.New(), in, cmd.OutOrStdout(), cmd.ErrOrStderr())
+			return maybeImportCreds(src, dst, name, move, a.creds, in, cmd.OutOrStdout(), cmd.ErrOrStderr())
 		},
 	}
 	cmd.Flags().BoolVar(&move, "move", false, "move files instead of copying")

@@ -1,11 +1,14 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/vika2603/ccs/internal/fsutil"
 )
 
 type Config struct {
@@ -59,10 +62,9 @@ func Save(path string, c Config) error {
 	if c.Version == 0 {
 		c.Version = supportedVersion
 	}
-	f, err := os.Create(path)
-	if err != nil {
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(c); err != nil {
 		return err
 	}
-	defer f.Close()
-	return toml.NewEncoder(f).Encode(c)
+	return fsutil.WriteFileAtomic(path, buf.Bytes(), 0o644)
 }

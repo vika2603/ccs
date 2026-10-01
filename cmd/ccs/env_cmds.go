@@ -9,9 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/vika2603/ccs/internal/layout"
 	"github.com/vika2603/ccs/internal/profileenv"
-	"github.com/vika2603/ccs/internal/state"
 )
 
 func newEnvCmd() *cobra.Command {
@@ -28,19 +26,6 @@ func newEnvCmd() *cobra.Command {
 		newEnvPathCmd(),
 	)
 	return cmd
-}
-
-// resolveProfile returns args[0] if present, else the active profile. Fails if
-// neither is available.
-func resolveProfile(p layout.Paths, args []string) (string, error) {
-	if len(args) > 0 && args[0] != "" {
-		return args[0], nil
-	}
-	name, _ := state.Read(p.ActiveFile())
-	if name == "" {
-		return "", errors.New("no profile given and no active profile; pass <profile> or run `ccs use` first")
-	}
-	return name, nil
 }
 
 func maskValue(v string) string {
@@ -63,15 +48,15 @@ func newEnvLsCmd() *cobra.Command {
 		Args:              cobra.MaximumNArgs(1),
 		ValidArgsFunction: completeProfileNamesAtArg0,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, p, err := manager()
+			a, err := loadApp()
 			if err != nil {
 				return err
 			}
-			name, err := resolveProfile(p, args)
+			name, err := a.profileOrActive(argOrEmpty(args))
 			if err != nil {
 				return err
 			}
-			f, err := profileenv.Load(p.EnvFile(name))
+			f, err := profileenv.Load(a.EnvFile(name))
 			if err != nil {
 				return err
 			}
@@ -96,11 +81,11 @@ func newEnvGetCmd() *cobra.Command {
 		Args:              cobra.ExactArgs(2),
 		ValidArgsFunction: completeProfileNamesAtArg0,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, p, err := manager()
+			a, err := loadApp()
 			if err != nil {
 				return err
 			}
-			f, err := profileenv.Load(p.EnvFile(args[0]))
+			f, err := profileenv.Load(a.EnvFile(args[0]))
 			if err != nil {
 				return err
 			}
@@ -122,29 +107,29 @@ func newEnvSetCmd() *cobra.Command {
 		Args:              cobra.MinimumNArgs(2),
 		ValidArgsFunction: completeProfileNamesAtArg0,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			m, p, err := manager()
+			a, err := loadApp()
 			if err != nil {
 				return err
 			}
 			name := args[0]
-			if _, err := m.Path(name); err != nil {
+			if _, err := a.mgr.Path(name); err != nil {
 				return err
 			}
-			f, err := profileenv.Load(p.EnvFile(name))
+			f, err := profileenv.Load(a.EnvFile(name))
 			if err != nil {
 				return err
 			}
 			if f.Env == nil {
 				f.Env = map[string]string{}
 			}
-			for _, a := range args[1:] {
-				k, v, err := profileenv.ParseAssignment(a)
+			for _, arg := range args[1:] {
+				k, v, err := profileenv.ParseAssignment(arg)
 				if err != nil {
 					return err
 				}
 				f.Env[k] = v
 			}
-			return profileenv.Save(p.EnvFile(name), f)
+			return profileenv.Save(a.EnvFile(name), f)
 		},
 	}
 	return cmd
@@ -157,15 +142,15 @@ func newEnvUnsetCmd() *cobra.Command {
 		Args:              cobra.MinimumNArgs(2),
 		ValidArgsFunction: completeProfileNamesAtArg0,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			m, p, err := manager()
+			a, err := loadApp()
 			if err != nil {
 				return err
 			}
 			name := args[0]
-			if _, err := m.Path(name); err != nil {
+			if _, err := a.mgr.Path(name); err != nil {
 				return err
 			}
-			f, err := profileenv.Load(p.EnvFile(name))
+			f, err := profileenv.Load(a.EnvFile(name))
 			if err != nil {
 				return err
 			}
@@ -175,7 +160,7 @@ func newEnvUnsetCmd() *cobra.Command {
 				}
 				delete(f.Env, k)
 			}
-			return profileenv.Save(p.EnvFile(name), f)
+			return profileenv.Save(a.EnvFile(name), f)
 		},
 	}
 	return cmd
@@ -188,15 +173,15 @@ func newEnvEditCmd() *cobra.Command {
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: completeProfileNamesAtArg0,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			m, p, err := manager()
+			a, err := loadApp()
 			if err != nil {
 				return err
 			}
 			name := args[0]
-			if _, err := m.Path(name); err != nil {
+			if _, err := a.mgr.Path(name); err != nil {
 				return err
 			}
-			path := p.EnvFile(name)
+			path := a.EnvFile(name)
 			// Snapshot (or mark as "did not exist") so we can roll back on a
 			// post-edit validation failure.
 			var backup []byte
@@ -250,15 +235,15 @@ func newEnvPathCmd() *cobra.Command {
 		Args:              cobra.MaximumNArgs(1),
 		ValidArgsFunction: completeProfileNamesAtArg0,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, p, err := manager()
+			a, err := loadApp()
 			if err != nil {
 				return err
 			}
-			name, err := resolveProfile(p, args)
+			name, err := a.profileOrActive(argOrEmpty(args))
 			if err != nil {
 				return err
 			}
-			cmd.Println(p.EnvFile(name))
+			cmd.Println(a.EnvFile(name))
 			return nil
 		},
 	}

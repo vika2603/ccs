@@ -1,0 +1,107 @@
+// Package fsutil holds the file copy and write helpers shared by the profile,
+// field, and archive code paths.
+package fsutil
+
+import (
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+)
+
+// CopyTree copies src to dst recursively, following symlinks so dst only
+// contains real files and directories. File and directory permissions are
+// preserved.
+func CopyTree(src, dst string) error {
+	return copyTree(src, dst, true)
+}
+
+// CopyTreeNoFollow copies src to dst recursively and recreates symlinks with
+// their original targets instead of following them.
+func CopyTreeNoFollow(src, dst string) error {
+	return copyTree(src, dst, false)
+}
+
+func copyTree(src, dst string, follow bool) error {
+	stat := os.Lstat
+	if follow {
+		stat = os.Stat
+	}
+	info, err := stat(src)
+	if err != nil {
+		return err
+	}
+	switch {
+	case info.Mode()&os.ModeSymlink != 0:
+		target, err := os.Readlink(src)
+		if err != nil {
+			return err
+		}
+		return os.Symlink(target, dst)
+	case info.IsDir():
+		if err := os.MkdirAll(dst, info.Mode().Perm()); err != nil {
+			return err
+		}
+		entries, err := os.ReadDir(src)
+		if err != nil {
+			return err
+		}
+		for _, e := range entries {
+			if err := copyTree(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name()), follow); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return CopyFile(src, dst, info.Mode().Perm())
+	}
+}
+
+// CopyFile copies the contents of the regular file src to dst, creating or
+// truncating dst with perm.
+func CopyFile(src, dst string, perm os.FileMode) (err error) {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, out.Close()) }()
+	_, err = io.Copy(out, in)
+	return err
+}
+
+// WriteFileAtomic writes data to a temporary file next to path and renames it
+// into place, so readers never observe a partially written file. If path is a
+// symlink, the file it points to is replaced and the symlink is kept.
+func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	_, err = tmp.Write(data)
+	if err == nil {
+		err = tmp.Chmod(perm)
+	}
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmpName, path)
+	}
+	if err != nil {
+		_ = os.Remove(tmpName)
+	}
+	return err
+}

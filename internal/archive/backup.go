@@ -35,30 +35,26 @@ type BackupManifest struct {
 }
 
 type BackupPackOptions struct {
-	CCSRoot          string
-	Profiles         []string
+	CCSRoot           string
+	Profiles          []string
 	PerProfileExclude []string
-	ConfigPath       string
-	EnvDir           string
-	SharedDir        string
-	Credentials      []byte
-	Manifest         BackupManifest
+	ConfigPath        string
+	EnvDir            string
+	SharedDir         string
+	Credentials       []byte
+	Manifest          BackupManifest
 }
 
 // PackBackup writes a full backup archive to outPath. The archive preserves
 // profile symlinks that point into the SharedDir as relative symlinks so the
 // backup is portable across machines.
 func PackBackup(outPath string, opts BackupPackOptions) error {
-	f, err := os.Create(outPath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	gz := gzip.NewWriter(f)
-	defer gz.Close()
-	tw := tar.NewWriter(gz)
-	defer tw.Close()
+	return writeArchive(outPath, func(tw *tar.Writer) error {
+		return packBackup(tw, opts)
+	})
+}
 
+func packBackup(tw *tar.Writer, opts BackupPackOptions) error {
 	opts.Manifest.ExportedAt = time.Now().UTC()
 	if opts.Manifest.Type == "" {
 		opts.Manifest.Type = BackupType
@@ -140,78 +136,137 @@ func PackBackup(outPath string, opts BackupPackOptions) error {
 // targets, so the caller must extract into the target ~/.ccs root for the
 // relative paths to resolve correctly.
 func UnpackBackup(tarPath, destDir string) (BackupManifest, error) {
+	var m BackupManifest
+	if err := extract(tarPath, destDir, BackupManifestName, &m, true); err != nil {
+		return BackupManifest{}, err
+	}
+	return m, nil
+}
+
+// maxManifestSize bounds how much of a manifest entry is read into memory.
+const maxManifestSize = 1 << 20
+
+// extract unpacks the gzipped tar at tarPath into destDir and decodes the
+// entry named manifestName into manifest. Entry names must stay inside
+// destDir and no entry may be placed beneath a symlink, so each symlink's
+// target is checked from the directory it is really created in. Symlink
+// entries are rejected unless allowSymlinks is set. Writes go through os.Root
+// as a second line of defense.
+func extract(tarPath, destDir, manifestName string, manifest any, allowSymlinks bool) error {
 	f, err := os.Open(tarPath)
 	if err != nil {
-		return BackupManifest{}, err
+		return err
 	}
 	defer f.Close()
 	gz, err := gzip.NewReader(f)
 	if err != nil {
-		return BackupManifest{}, err
+		return err
 	}
-	tr := tar.NewReader(gz)
 	absDest, err := filepath.Abs(destDir)
 	if err != nil {
-		return BackupManifest{}, err
+		return err
 	}
 	absDest = filepath.Clean(absDest)
-	var m BackupManifest
+	root, err := os.OpenRoot(absDest)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+
+	tr := tar.NewReader(gz)
 	var manifestSeen bool
 	for {
 		h, err := tr.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
-			return BackupManifest{}, err
+			return err
 		}
 		out, err := safeJoin(absDest, h.Name)
 		if err != nil {
-			return BackupManifest{}, err
+			return err
 		}
+		rel, err := filepath.Rel(absDest, out)
+		if err != nil {
+			return err
+		}
+		if h.Name == manifestName {
+			data, err := io.ReadAll(io.LimitReader(tr, maxManifestSize))
+			if err != nil {
+				return err
+			}
+			if err := json.Unmarshal(data, manifest); err != nil {
+				return fmt.Errorf("parse %s: %w", manifestName, err)
+			}
+			manifestSeen = true
+			continue
+		}
+		if err := rejectSymlinkParents(root, rel); err != nil {
+			return err
+		}
+		mode := os.FileMode(h.Mode).Perm()
 		switch h.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(out, os.FileMode(h.Mode)); err != nil {
-				return BackupManifest{}, err
+			if err := root.MkdirAll(rel, mode); err != nil {
+				return err
 			}
 		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
-				return BackupManifest{}, err
+			if err := root.MkdirAll(filepath.Dir(rel), 0o755); err != nil {
+				return err
 			}
-			wf, err := os.OpenFile(out, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(h.Mode))
-			if err != nil {
-				return BackupManifest{}, err
-			}
-			if _, err := io.Copy(wf, tr); err != nil {
-				wf.Close()
-				return BackupManifest{}, err
-			}
-			wf.Close()
-			if h.Name == BackupManifestName {
-				b, _ := os.ReadFile(out)
-				if err := json.Unmarshal(b, &m); err != nil {
-					return BackupManifest{}, err
-				}
-				manifestSeen = true
+			if err := extractFile(root, rel, mode, tr); err != nil {
+				return err
 			}
 		case tar.TypeSymlink:
+			if !allowSymlinks {
+				return fmt.Errorf("unexpected symlink entry %q", h.Name)
+			}
 			if err := validateSymlinkTarget(absDest, out, h.Linkname); err != nil {
-				return BackupManifest{}, err
+				return err
 			}
-			if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
-				return BackupManifest{}, err
+			if err := root.MkdirAll(filepath.Dir(rel), 0o755); err != nil {
+				return err
 			}
-			if err := os.Symlink(h.Linkname, out); err != nil {
-				return BackupManifest{}, err
+			if err := root.Symlink(h.Linkname, rel); err != nil {
+				return err
 			}
 		default:
-			return BackupManifest{}, fmt.Errorf("unsupported tar entry %q", h.Name)
+			return fmt.Errorf("unsupported tar entry %q", h.Name)
 		}
 	}
 	if !manifestSeen {
-		return BackupManifest{}, fmt.Errorf("%s missing from archive", BackupManifestName)
+		return fmt.Errorf("%s missing from archive", manifestName)
 	}
-	return m, nil
+	return nil
+}
+
+// rejectSymlinkParents fails if any existing parent directory of name inside
+// root is a symlink.
+func rejectSymlinkParents(root *os.Root, name string) error {
+	for dir := filepath.Dir(name); dir != "."; dir = filepath.Dir(dir) {
+		info, err := root.Lstat(dir)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("tar entry %q escapes dest through symlink %q", name, filepath.ToSlash(dir))
+		}
+	}
+	return nil
+}
+
+func extractFile(root *os.Root, name string, mode os.FileMode, r io.Reader) (err error) {
+	wf, err := root.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, wf.Close()) }()
+	_, err = io.Copy(wf, r)
+	return err
 }
 
 // walkPreserveSymlinks walks root and writes every entry under the given

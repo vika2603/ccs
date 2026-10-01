@@ -7,14 +7,12 @@ import (
 	"testing"
 )
 
-func TestInstallShimWritesFile(t *testing.T) {
+func TestInitInstallsShim(t *testing.T) {
 	home := t.TempDir()
-	if _, err := runCmd(t, home, "init"); err != nil {
-		t.Fatalf("init: %v", err)
-	}
-	out, err := runCmd(t, home, "install-shim")
+	t.Setenv("PATH", "/usr/bin:/bin")
+	out, err := runCmd(t, home, "init")
 	if err != nil {
-		t.Fatalf("install-shim: %v", err)
+		t.Fatalf("init: %v", err)
 	}
 
 	shim := filepath.Join(home, ".ccs", "bin", "claude")
@@ -25,44 +23,21 @@ func TestInstallShimWritesFile(t *testing.T) {
 	if info.Mode().Perm()&0o111 == 0 {
 		t.Errorf("shim not executable: mode %v", info.Mode())
 	}
-
 	body, err := os.ReadFile(shim)
 	if err != nil {
 		t.Fatal(err)
 	}
 	content := string(body)
-	if !strings.HasPrefix(content, "#!/bin/sh\n") {
-		t.Errorf("shim missing shebang: %q", content)
-	}
-	if !strings.Contains(content, "__shim_exec") {
-		t.Errorf("shim should call __shim_exec: %q", content)
-	}
-	if !strings.Contains(content, "'claude'") {
-		t.Errorf("shim should pass target 'claude': %q", content)
-	}
-
-	// Output tells the user where the shim lives + PATH guidance.
-	if !strings.Contains(out, shim) {
-		t.Errorf("install output missing shim path: %q", out)
+	if !strings.HasPrefix(content, "#!/bin/sh\n") || !strings.Contains(content, "__shim_exec") || !strings.Contains(content, "'claude'") {
+		t.Errorf("unexpected shim content: %q", content)
 	}
 	if !strings.Contains(out, ".zprofile") {
-		t.Errorf("install output missing .zprofile hint: %q", out)
+		t.Errorf("init should print a PATH hint when ~/.ccs/bin is not on PATH: %q", out)
 	}
-}
 
-func TestInstallShimRefusesOverwriteWithoutForce(t *testing.T) {
-	home := t.TempDir()
+	// Re-running init rewrites the shim instead of failing.
 	if _, err := runCmd(t, home, "init"); err != nil {
-		t.Fatalf("init: %v", err)
-	}
-	if _, err := runCmd(t, home, "install-shim"); err != nil {
-		t.Fatalf("install-shim: %v", err)
-	}
-	if _, err := runCmd(t, home, "install-shim"); err == nil {
-		t.Errorf("expected error when shim already exists")
-	}
-	if _, err := runCmd(t, home, "install-shim", "--force"); err != nil {
-		t.Errorf("--force should overwrite: %v", err)
+		t.Fatalf("second init: %v", err)
 	}
 }
 
@@ -161,5 +136,29 @@ func TestShimExecDoesNotConsumeTargetFlags(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "ccs-nonexistent-bin-xyz") {
 		t.Errorf("expected resolution error about target binary, got: %v", err)
+	}
+}
+
+func TestInitReplacesShimSymlinkWithoutTouchingTarget(t *testing.T) {
+	home := t.TempDir()
+	real := filepath.Join(home, "real-claude")
+	if err := os.WriteFile(real, []byte("#!/bin/sh\necho real\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	shim := filepath.Join(home, ".ccs", "bin", "claude")
+	if err := os.MkdirAll(filepath.Dir(shim), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, shim); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCmd(t, home, "init"); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if b, _ := os.ReadFile(real); string(b) != "#!/bin/sh\necho real\n" {
+		t.Errorf("symlink target was overwritten: %q", b)
+	}
+	if info, err := os.Lstat(shim); err != nil || info.Mode()&os.ModeSymlink != 0 {
+		t.Errorf("shim should now be a regular file: %v", err)
 	}
 }

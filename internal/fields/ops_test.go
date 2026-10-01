@@ -1,11 +1,8 @@
 package fields
 
 import (
-	"bufio"
-	"bytes"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/vika2603/ccs/internal/config"
@@ -42,14 +39,16 @@ func TestShareConflictUsesPrompt(t *testing.T) {
 	os.MkdirAll(p.SharedField("skills"), 0o755)
 	os.WriteFile(filepath.Join(p.SharedField("skills"), "old.md"), []byte("O"), 0o644)
 
-	var out bytes.Buffer
-	// Wrap the scripted input in bufio.Reader so PromptConflict's
-	// non-TTY fail-closed branch does not trip on strings.Reader.
-	if err := ops.Share("work", "skills", &out, bufio.NewReader(strings.NewReader("o\n"))); err != nil {
+	var asked bool
+	overwrite := func(string, string, string) (bool, error) { asked = true; return true, nil }
+	if err := ops.Share("work", "skills", overwrite); err != nil {
 		t.Fatalf("share: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(p.SharedField("skills"), "new.md")); err != nil {
 		t.Fatalf("expected overwrite path to win: %v", err)
+	}
+	if !asked {
+		t.Error("conflict callback was not consulted for non-empty shared entry")
 	}
 }
 
@@ -94,8 +93,8 @@ func TestForkShareRoundTripFileField(t *testing.T) {
 		t.Fatalf("mutate: %v", err)
 	}
 
-	var out bytes.Buffer
-	if err := ops.Share("work", "statusline.sh", &out, bufio.NewReader(strings.NewReader("o\n"))); err != nil {
+	overwrite := func(string, string, string) (bool, error) { return true, nil }
+	if err := ops.Share("work", "statusline.sh", overwrite); err != nil {
 		t.Fatalf("share: %v", err)
 	}
 	info, err = os.Lstat(linkPath)
@@ -160,33 +159,6 @@ func TestRelinkErrorsWhenForked(t *testing.T) {
 	err := ops.Relink("work", "skills")
 	if err == nil {
 		t.Fatalf("expected error when relinking a forked field")
-	}
-}
-
-func TestRelinkAllRelinksOnlyMissing(t *testing.T) {
-	ops, p := setupOps(t)
-	profile := p.ProfilePath("work")
-	os.MkdirAll(profile, 0o755)
-	os.MkdirAll(p.SharedField("skills"), 0o755)
-	os.Symlink(p.SharedField("skills"), filepath.Join(profile, "skills"))
-	os.MkdirAll(p.SharedField("commands"), 0o755)
-	os.MkdirAll(p.SharedField("agents"), 0o755)
-	os.MkdirAll(p.SharedField("plugins"), 0o755)
-	os.Symlink(p.SharedField("plugins"), filepath.Join(profile, "plugins"))
-
-	relinked, err := ops.RelinkAll("work")
-	if err != nil {
-		t.Fatalf("relinkAll: %v", err)
-	}
-	got := map[string]bool{}
-	for _, f := range relinked {
-		got[f] = true
-	}
-	if !got["commands"] || !got["agents"] {
-		t.Fatalf("expected commands+agents to be relinked, got %v", relinked)
-	}
-	if got["skills"] || got["plugins"] {
-		t.Fatalf("already-linked fields should not be re-relinked, got %v", relinked)
 	}
 }
 

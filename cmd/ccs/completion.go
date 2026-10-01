@@ -2,17 +2,14 @@ package main
 
 import (
 	"github.com/spf13/cobra"
-
-	"github.com/vika2603/ccs/internal/config"
-	"github.com/vika2603/ccs/internal/layout"
 )
 
 func completeProfileNames(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
-	m, _, err := manager()
+	a, err := loadApp()
 	if err != nil {
 		return nil, cobra.ShellCompDirectiveError
 	}
-	names, err := m.List()
+	names, err := a.mgr.List()
 	if err != nil {
 		return nil, cobra.ShellCompDirectiveError
 	}
@@ -20,14 +17,11 @@ func completeProfileNames(_ *cobra.Command, _ []string, _ string) ([]string, cob
 }
 
 func completeFieldNames(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
-	p, err := layout.FromEnv()
+	a, err := loadApp()
 	if err != nil {
 		return nil, cobra.ShellCompDirectiveError
 	}
-	cfg, err := config.Load(p.ConfigFile())
-	if err != nil {
-		return nil, cobra.ShellCompDirectiveError
-	}
+	cfg := a.cfg
 	out := make([]string, 0, len(cfg.Shared)+len(cfg.Isolated)+len(cfg.Export.Exclude))
 	out = append(out, cfg.Shared...)
 	out = append(out, cfg.Isolated...)

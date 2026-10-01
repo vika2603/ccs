@@ -1,111 +1,81 @@
 package main
 
 import (
-	"fmt"
 	"os"
 	"syscall"
 
 	"github.com/spf13/cobra"
 
-	"github.com/vika2603/ccs/internal/config"
-	"github.com/vika2603/ccs/internal/layout"
 	"github.com/vika2603/ccs/internal/profileenv"
-	"github.com/vika2603/ccs/internal/runx"
-	"github.com/vika2603/ccs/internal/state"
 )
 
-func runClaudeForProfile(name string, rest []string) error {
-	m, p, err := manager()
+// launch execs the command in rest (default: the configured launch command)
+// with CLAUDE_CONFIG_DIR and the env vars of profile name. An empty name
+// passes the parent environment through unchanged, so the PATH shim can
+// still start claude when no profile is active.
+func (a app) launch(name string, rest []string) error {
+	rest = a.launchCommand(rest)
+	bin, err := profileenv.ResolveSkipping(rest, []string{a.BinDir()})
 	if err != nil {
 		return err
 	}
-	path, err := m.Path(name)
-	if err != nil {
-		return err
+	env := os.Environ()
+	if name != "" {
+		path, err := a.mgr.Path(name)
+		if err != nil {
+			return err
+		}
+		penv, err := profileenv.Load(a.EnvFile(name))
+		if err != nil {
+			return err
+		}
+		env = profileenv.BuildEnv(env, path, penv.Env)
 	}
-	rest = defaultCommand(p, rest)
-	bin, err := runx.ResolveSkipping(rest, []string{p.BinDir()})
-	if err != nil {
-		return err
-	}
-	penv, err := profileenv.Load(p.EnvFile(name))
-	if err != nil {
-		return err
-	}
-	env := runx.BuildEnv(os.Environ(), path, penv.Env)
 	return syscall.Exec(bin, rest, env)
 }
 
-// runClaudePassthrough execs the target command with the parent's env unchanged.
-// Used when no profile is active - the shim still needs to launch claude even
-// without per-profile env injection.
-func runClaudePassthrough(rest []string) error {
-	_, p, err := manager()
-	if err != nil {
-		return err
-	}
-	rest = defaultCommand(p, rest)
-	bin, err := runx.ResolveSkipping(rest, []string{p.BinDir()})
-	if err != nil {
-		return err
-	}
-	return syscall.Exec(bin, rest, os.Environ())
-}
-
-func defaultCommand(p layout.Paths, rest []string) []string {
+func (a app) launchCommand(rest []string) []string {
 	if len(rest) > 0 {
 		return rest
 	}
-	cfg, err := config.Load(p.ConfigFile())
-	if err == nil && len(cfg.Launch.Command) > 0 {
-		return append([]string{}, cfg.Launch.Command...)
+	if len(a.cfg.Launch.Command) > 0 {
+		return append([]string{}, a.cfg.Launch.Command...)
 	}
 	return []string{"claude"}
 }
 
-func activeProfileName() (string, error) {
-	_, p, err := manager()
-	if err != nil {
-		return "", err
+// splitProfileArgs splits `<profile> [--] [args...]` into the profile name
+// and the remaining arguments.
+func splitProfileArgs(args []string) (string, []string) {
+	if len(args) == 0 {
+		return "", nil
 	}
-	name, _ := state.Read(p.ActiveFile())
-	if name == "" {
-		return "", fmt.Errorf("no active profile; run `ccs use <profile>` or pass a profile name")
+	rest := args[1:]
+	if len(rest) > 0 && rest[0] == "--" {
+		rest = rest[1:]
 	}
-	return name, nil
+	return args[0], rest
 }
 
 func newRunCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:                "run [profile] [-- <cmd> [args...]]",
-		Short:              "Run a command with CLAUDE_CONFIG_DIR set (default profile: active, default cmd: claude)",
-		DisableFlagParsing: false,
-		Args:               cobra.ArbitraryArgs,
-		ValidArgsFunction:  completeProfileNamesAtArg0,
+	return &cobra.Command{
+		Use:               "run [profile] [-- <cmd> [args...]]",
+		Short:             "Run a command with CLAUDE_CONFIG_DIR set (default profile: active, default cmd: claude)",
+		Args:              cobra.ArbitraryArgs,
+		ValidArgsFunction: completeProfileNamesAtArg0,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			var name string
-			var rest []string
-			if len(args) == 0 {
-				// No explicit profile: use active if any, otherwise pass
-				// through without env injection. This lets the PATH shim
-				// (~/.ccs/bin/claude) call `ccs run -- claude` unconditionally.
-				_, p, err := manager()
-				if err != nil {
-					return err
-				}
-				name, _ = state.Read(p.ActiveFile())
-			} else {
-				name = args[0]
-				rest = args[1:]
-				if len(rest) > 0 && rest[0] == "--" {
-					rest = rest[1:]
-				}
+			a, err := loadApp()
+			if err != nil {
+				return err
 			}
+			name, rest := splitProfileArgs(args)
 			if name == "" {
-				return runClaudePassthrough(rest)
+				// No explicit profile: use the active one if any, otherwise
+				// pass through. This lets the PATH shim call `ccs run -- claude`
+				// unconditionally.
+				name, _ = a.Active()
 			}
-			return runClaudeForProfile(name, rest)
+			return a.launch(name, rest)
 		},
 	}
-	return cmd
 }

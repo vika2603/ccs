@@ -1,4 +1,4 @@
-package state
+package layout
 
 import (
 	"path/filepath"
@@ -11,7 +11,7 @@ import (
 
 func TestReadMissingIsEmpty(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "active")
-	got, err := Read(p)
+	got, err := readActive(p)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -22,10 +22,10 @@ func TestReadMissingIsEmpty(t *testing.T) {
 
 func TestRoundTrip(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "active")
-	if err := Write(p, "work"); err != nil {
+	if err := writeActive(p, "work"); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	got, err := Read(p)
+	got, err := readActive(p)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -36,11 +36,11 @@ func TestRoundTrip(t *testing.T) {
 
 func TestClear(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "active")
-	Write(p, "work")
-	if err := Clear(p); err != nil {
+	writeActive(p, "work")
+	if err := clearActive(p); err != nil {
 		t.Fatalf("clear: %v", err)
 	}
-	got, _ := Read(p)
+	got, _ := readActive(p)
 	if got != "" {
 		t.Errorf("expected empty after clear, got %q", got)
 	}
@@ -51,18 +51,18 @@ func TestConcurrentWritesDoNotCorrupt(t *testing.T) {
 	const n = 50
 	var wg sync.WaitGroup
 	wg.Add(n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		go func(i int) {
 			defer wg.Done()
 			name := "p"
 			if i%2 == 0 {
 				name = "q"
 			}
-			_ = Write(p, name)
+			_ = writeActive(p, name)
 		}(i)
 	}
 	wg.Wait()
-	got, err := Read(p)
+	got, err := readActive(p)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestWriteLockRetriesThenFails(t *testing.T) {
 	defer held.Unlock()
 
 	start := time.Now()
-	err = Write(p, "work")
+	err = writeActive(p, "work")
 	if err == nil {
 		t.Fatalf("expected lock timeout")
 	}
@@ -92,10 +92,10 @@ func TestWriteLockRetriesThenFails(t *testing.T) {
 
 func TestRejectInvalidName(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "active")
-	if err := Write(p, "bad name"); err == nil {
+	if err := writeActive(p, "bad name"); err == nil {
 		t.Fatalf("expected error for name with space")
 	}
-	if err := Write(p, "../esc"); err == nil {
+	if err := writeActive(p, "../esc"); err == nil {
 		t.Fatalf("expected error for name with path separator")
 	}
 }

@@ -14,14 +14,14 @@ type fakeKeychain struct{ services []string }
 
 func (f fakeKeychain) List() ([]string, error) { return f.services, nil }
 
-func setup(t *testing.T, kc KeychainLister) (Checker, layout.Paths) {
+func setup(t *testing.T, kc fakeKeychain) (Checker, layout.Paths) {
 	home := t.TempDir()
 	p := layout.New(home)
 	os.MkdirAll(p.SharedDir(), 0o755)
 	os.MkdirAll(p.ProfilesDir(), 0o755)
 	configured := fields.NewRegistry(config.Default())
 	defaults := fields.NewRegistry(config.Default())
-	return NewChecker(p, configured, defaults, kc, "/nonexistent/default/claude"), p
+	return NewChecker(p, configured, defaults, kc.List, "/nonexistent/default/claude"), p
 }
 
 func TestCleanTree(t *testing.T) {
@@ -86,7 +86,7 @@ func TestDetectsClassificationDrift(t *testing.T) {
 	os.MkdirAll(p.ProfilesDir(), 0o755)
 	configured := fields.NewRegistry(config.Config{Isolated: []string{"skills"}})
 	defaults := fields.NewRegistry(config.Config{Shared: []string{"skills"}})
-	c := NewChecker(p, configured, defaults, fakeKeychain{}, "/nonexistent/default/claude")
+	c := NewChecker(p, configured, defaults, fakeKeychain{}.List, "/nonexistent/default/claude")
 	findings, _ := c.Check()
 	found := false
 	for _, f := range findings {
@@ -111,7 +111,7 @@ func TestUserAdditionsDoNotDrift(t *testing.T) {
 	defaults := fields.NewRegistry(config.Config{
 		Shared: []string{"skills"},
 	})
-	c := NewChecker(p, configured, defaults, fakeKeychain{}, "/nonexistent/default/claude")
+	c := NewChecker(p, configured, defaults, fakeKeychain{}.List, "/nonexistent/default/claude")
 	findings, _ := c.Check()
 	for _, f := range findings {
 		if f.Kind == ClassificationDrift {
@@ -127,4 +127,33 @@ func containsKind(findings []Finding, k Kind) bool {
 		}
 	}
 	return false
+}
+
+func TestSymlinkedProfileIsNotOrphan(t *testing.T) {
+	c, p := setup(t, fakeKeychain{})
+	real := filepath.Join(t.TempDir(), "elsewhere")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(p.ProfilesDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, p.ProfilePath("linked")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(p.EnvDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.EnvFile("linked"), []byte("[env]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	findings, err := c.Check()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range findings {
+		if f.Kind == OrphanEnvFile {
+			t.Errorf("env file of a symlinked profile reported as orphan: %+v", f)
+		}
+	}
 }

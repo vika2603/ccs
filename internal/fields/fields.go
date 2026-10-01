@@ -1,6 +1,7 @@
 package fields
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 
@@ -180,8 +181,6 @@ func (r *Registry) Shared() []Classification {
 
 func (r *Registry) All() map[string]Classification {
 	out := make(map[string]Classification, len(r.known))
-	for name, class := range r.known {
-		out[name] = class
-	}
+	maps.Copy(out, r.known)
 	return out
 }

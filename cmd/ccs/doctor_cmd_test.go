@@ -144,3 +144,56 @@ func TestMvSyncsEnvFile(t *testing.T) {
 		t.Errorf("new env file should exist: %v", err)
 	}
 }
+
+func TestDoctorFixRepairsLinksAndOrphans(t *testing.T) {
+	home := t.TempDir()
+	runCmd(t, home, "init")
+	runCmd(t, home, "new", "work")
+	ccs := filepath.Join(home, ".ccs")
+	os.Remove(filepath.Join(ccs, "profiles", "work", "agents"))
+	os.RemoveAll(filepath.Join(ccs, "shared", "skills"))
+	ghost := filepath.Join(ccs, "env", "ghost.toml")
+	os.WriteFile(ghost, []byte("[env]\n"), 0o600)
+
+	if _, err := runCmd(t, home, "doctor"); err == nil {
+		t.Fatal("doctor should report the damage before --fix")
+	}
+	out, err := runCmd(t, home, "doctor", "--fix", "-y")
+	if err != nil {
+		t.Fatalf("doctor --fix: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "clean") {
+		t.Errorf("expected clean after fix: %q", out)
+	}
+	if target, err := os.Readlink(filepath.Join(ccs, "profiles", "work", "agents")); err != nil || target != filepath.Join(ccs, "shared", "agents") {
+		t.Errorf("agents link not restored: %q, %v", target, err)
+	}
+	if info, err := os.Stat(filepath.Join(ccs, "shared", "skills")); err != nil || !info.IsDir() {
+		t.Errorf("shared/skills not recreated: %v", err)
+	}
+	if _, err := os.Stat(ghost); !os.IsNotExist(err) {
+		t.Errorf("orphan env file should be deleted: %v", err)
+	}
+}
+
+func TestDoctorFixKeepsOrphansWithoutConfirmation(t *testing.T) {
+	home := t.TempDir()
+	runCmd(t, home, "init")
+	ghost := filepath.Join(home, ".ccs", "env", "ghost.toml")
+	os.WriteFile(ghost, []byte("[env]\n"), 0o600)
+	if _, err := runCmdWithInput(t, home, "n\n", "doctor", "--fix"); err == nil {
+		t.Error("declined deletion should leave a finding")
+	}
+	if _, err := os.Stat(ghost); err != nil {
+		t.Errorf("orphan env file must be kept when not confirmed: %v", err)
+	}
+}
+
+func TestDoctorSkipsBlankProfiles(t *testing.T) {
+	home := t.TempDir()
+	runCmd(t, home, "init")
+	runCmd(t, home, "new", "bare", "--blank")
+	if out, err := runCmd(t, home, "doctor"); err != nil {
+		t.Errorf("blank profile should not be reported as missing links: %v\n%s", err, out)
+	}
+}

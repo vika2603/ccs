@@ -3,6 +3,7 @@
 package creds
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -36,7 +37,7 @@ func TestFileStoreRoundTrip(t *testing.T) {
 	if err := s.Delete(dir); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	if _, err := s.Read(dir); err != ErrNotFound {
+	if _, err := s.Read(dir); !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 }

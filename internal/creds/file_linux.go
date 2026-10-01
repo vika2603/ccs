@@ -52,3 +52,6 @@ func (s fileStore) Exists(profile string) (bool, error) {
 	}
 	return false, err
 }
+
+// ListServices reports no keychain items; Linux stores credentials in files.
+func ListServices() ([]string, error) { return nil, nil }

@@ -3,6 +3,7 @@
 package creds
 
 import (
+	"errors"
 	"os/exec"
 	"os/user"
 	"path/filepath"
@@ -56,7 +57,7 @@ func TestKeychainStoreRoundTrip(t *testing.T) {
 
 func TestKeychainReadNotFound(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nope")
-	if _, err := NewKeychainStore().Read(dir); err != ErrNotFound {
+	if _, err := NewKeychainStore().Read(dir); !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 }

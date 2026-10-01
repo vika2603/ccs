@@ -4,9 +4,11 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -22,9 +24,10 @@ func TestPackDereferencesSymlinks(t *testing.T) {
 
 	tarPath := filepath.Join(dir, "out.tar.gz")
 	p := PackOptions{
-		ProfileDir:  profile,
-		ProfileName: "work",
-		Manifest:    Manifest{Version: 1, Profile: "work"},
+		ProfileDir:     profile,
+		ProfileName:    "work",
+		ProfileEntries: []string{"skills"},
+		Manifest:       Manifest{Version: 1, Profile: "work"},
 	}
 	if err := Pack(tarPath, p); err != nil {
 		t.Fatalf("pack: %v", err)
@@ -57,9 +60,10 @@ func TestUnpackRestoresTree(t *testing.T) {
 	os.WriteFile(filepath.Join(profile, "skills", "a.md"), []byte("A"), 0o644)
 	tarPath := filepath.Join(dir, "out.tar.gz")
 	if err := Pack(tarPath, PackOptions{
-		ProfileDir:  profile,
-		ProfileName: "work",
-		Manifest:    Manifest{Version: 1, Profile: "work"},
+		ProfileDir:     profile,
+		ProfileName:    "work",
+		ProfileEntries: []string{"skills"},
+		Manifest:       Manifest{Version: 1, Profile: "work"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -114,6 +118,89 @@ func TestPackIncludesFileShapedSharedEntry(t *testing.T) {
 	}
 	if !sharedEntry {
 		t.Errorf("shared/CLAUDE.md missing from archive: %v", names)
+	}
+}
+
+func TestPackOnlyIncludesListedEntries(t *testing.T) {
+	dir := t.TempDir()
+	profile := filepath.Join(dir, "profile")
+	if err := os.MkdirAll(profile, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(profile, ".credentials.json"), []byte("token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tarPath := filepath.Join(dir, "out.tar.gz")
+	if err := Pack(tarPath, PackOptions{
+		ProfileDir: profile,
+		Manifest:   Manifest{Version: 1, Profile: "work"},
+	}); err != nil {
+		t.Fatalf("pack: %v", err)
+	}
+	if names := listTar(t, tarPath); !slices.Equal(names, []string{"manifest.json"}) {
+		t.Errorf("archive should only hold the manifest, got %v", names)
+	}
+}
+
+func TestUnpackRejectsTraversal(t *testing.T) {
+	for _, tc := range traversalCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tarPath := filepath.Join(t.TempDir(), "bad.tar.gz")
+			writeMaliciousArchive(t, tarPath, "manifest.json", Manifest{Version: 1, Profile: "work"}, tc.header, tc.body)
+			dst := t.TempDir()
+			if _, err := Unpack(tarPath, dst); err == nil {
+				t.Fatalf("expected error for %s, got nil", tc.name)
+			}
+			outside := filepath.Join(filepath.Dir(dst), "escape.txt")
+			if _, err := os.Lstat(outside); err == nil {
+				t.Errorf("file written outside dest: %s", outside)
+			}
+		})
+	}
+}
+
+// A symlink chain can pass the per-link lexical check yet resolve outside the
+// destination; writes through it must still be refused.
+func TestUnpackRefusesWritesThroughEscapingSymlinkChain(t *testing.T) {
+	tarPath := filepath.Join(t.TempDir(), "chain.tar.gz")
+	f, err := os.Create(tarPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gz := gzip.NewWriter(f)
+	tw := tar.NewWriter(gz)
+	entries := []tar.Header{
+		{Name: "sub/q", Typeflag: tar.TypeSymlink, Linkname: "."},
+		{Name: "sub/p", Typeflag: tar.TypeSymlink, Linkname: "q/../.."},
+		{Name: "sub/p/escape.txt", Typeflag: tar.TypeReg, Mode: 0o644, Size: 5},
+	}
+	for _, h := range entries {
+		if err := tw.WriteHeader(&h); err != nil {
+			t.Fatal(err)
+		}
+		if h.Typeflag == tar.TypeReg {
+			if _, err := tw.Write([]byte("pwned")); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := writeTarBytes(tw, "manifest.json", []byte(`{"profile":"work"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := errors.Join(tw.Close(), gz.Close(), f.Close()); err != nil {
+		t.Fatal(err)
+	}
+
+	parent := t.TempDir()
+	dst := filepath.Join(parent, "dest")
+	if err := os.Mkdir(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Unpack(tarPath, dst); err == nil {
+		t.Fatal("expected write through escaping symlink chain to fail")
+	}
+	if _, err := os.Lstat(filepath.Join(parent, "escape.txt")); err == nil {
+		t.Error("file written outside dest through symlink chain")
 	}
 }
 

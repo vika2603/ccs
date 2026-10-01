@@ -2,17 +2,16 @@ package main
 
 import (
 	"bufio"
-	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 
 	"github.com/spf13/cobra"
 
-	"github.com/vika2603/ccs/internal/config"
 	"github.com/vika2603/ccs/internal/fields"
-	"github.com/vika2603/ccs/internal/layout"
-	"github.com/vika2603/ccs/internal/state"
 )
 
 func bufferedStdin(r io.Reader) io.Reader {
@@ -22,27 +21,30 @@ func bufferedStdin(r io.Reader) io.Reader {
 	return bufio.NewReader(r)
 }
 
-func opsForActive(name string) (fields.Ops, string, error) {
-	p, err := layout.FromEnv()
+// confirmed reads one line from r and reports whether it is a yes answer.
+func confirmed(r io.Reader) bool {
+	line, _ := bufio.NewReader(r).ReadString('\n')
+	ans := strings.ToLower(strings.TrimSpace(line))
+	return ans == "y" || ans == "yes"
+}
+
+// appForProfile loads the app and resolves name to itself or, when empty, to
+// the active profile.
+func appForProfile(name string) (app, string, error) {
+	a, err := loadApp()
 	if err != nil {
-		return fields.Ops{}, "", err
+		return app{}, "", err
 	}
-	cfg, err := config.Load(p.ConfigFile())
-	if err != nil {
-		return fields.Ops{}, "", err
+	name, err = a.profileOrActive(name)
+	return a, name, err
+}
+
+// argOrEmpty returns args[0], or "" when args is empty.
+func argOrEmpty(args []string) string {
+	if len(args) == 0 {
+		return ""
 	}
-	if name == "" {
-		active, err := state.Read(p.ActiveFile())
-		if err != nil {
-			return fields.Ops{}, "", err
-		}
-		if active == "" {
-			return fields.Ops{}, "", fmt.Errorf("no active profile; pass a profile name explicitly")
-		}
-		name = active
-	}
-	reg := fields.NewRegistry(cfg)
-	return fields.NewOps(p, reg), name, nil
+	return args[0]
 }
 
 func newForkCmd() *cobra.Command {
@@ -57,11 +59,11 @@ func newForkCmd() *cobra.Command {
 			if len(args) == 2 {
 				name = args[1]
 			}
-			ops, profile, err := opsForActive(name)
+			a, profile, err := appForProfile(name)
 			if err != nil {
 				return err
 			}
-			if err := ops.Fork(profile, field); err != nil {
+			if err := a.ops().Fork(profile, field); err != nil {
 				return err
 			}
 			cmd.Printf("forked %s for profile %s\n", field, profile)
@@ -82,11 +84,11 @@ func newShareCmd() *cobra.Command {
 			if len(args) == 2 {
 				name = args[1]
 			}
-			ops, profile, err := opsForActive(name)
+			a, profile, err := appForProfile(name)
 			if err != nil {
 				return err
 			}
-			if err := ops.Share(profile, field, cmd.OutOrStdout(), bufferedStdin(cmd.InOrStdin())); err != nil {
+			if err := a.ops().Share(profile, field, importPrompter{out: cmd.OutOrStdout(), in: bufferedStdin(cmd.InOrStdin())}.OnSharedConflict); err != nil {
 				return err
 			}
 			cmd.Printf("shared %s for profile %s\n", field, profile)
@@ -106,24 +108,24 @@ func newStatusCmd() *cobra.Command {
 			if len(args) == 1 {
 				name = args[0]
 			}
-			ops, profile, err := opsForActive(name)
+			a, profile, err := appForProfile(name)
 			if err != nil {
 				return err
 			}
-			st, err := ops.Status(profile)
+			st, err := a.ops().Status(profile)
 			if err != nil {
 				return err
 			}
-			cmd.Printf("profile %s\n", profile)
-			for field, ls := range st {
-				cmd.Printf("  %s\t%s\n", field, describeLinkState(ls))
+			if account := a.mgr.Account(profile); account != "" {
+				cmd.Printf("profile %s (%s)\n", profile, account)
+			} else {
+				cmd.Printf("profile %s\n", profile)
+			}
+			for _, field := range slices.Sorted(maps.Keys(st)) {
+				cmd.Printf("  %s\t%s\n", field, describeLinkState(st[field]))
 			}
 
-			p, err := layout.FromEnv()
-			if err != nil {
-				return err
-			}
-			sharedEntries, err := os.ReadDir(p.SharedDir())
+			sharedEntries, err := os.ReadDir(a.SharedDir())
 			if err != nil {
 				return err
 			}
@@ -134,7 +136,7 @@ func newStatusCmd() *cobra.Command {
 					continue
 				}
 				if e.IsDir() {
-					children, _ := os.ReadDir(filepath.Join(p.SharedDir(), e.Name()))
+					children, _ := os.ReadDir(filepath.Join(a.SharedDir(), e.Name()))
 					cmd.Printf("  %s/\t(%d entries)\n", e.Name(), len(children))
 					continue
 				}

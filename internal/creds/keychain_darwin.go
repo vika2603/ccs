@@ -6,10 +6,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"os/user"
-	"path/filepath"
 	"strings"
 )
 
@@ -26,13 +24,8 @@ func NewKeychainStore() Store {
 
 func New() Store { return NewKeychainStore() }
 
-func defaultClaudePath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".claude")
-}
-
 func (k keychainStore) Read(profile string) ([]byte, error) {
-	service, err := ServiceName(profile, defaultClaudePath())
+	service, err := ServiceName(profile, DefaultClaudeDir())
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +44,7 @@ func (k keychainStore) Read(profile string) ([]byte, error) {
 }
 
 func (k keychainStore) Write(profile string, data []byte) error {
-	service, err := ServiceName(profile, defaultClaudePath())
+	service, err := ServiceName(profile, DefaultClaudeDir())
 	if err != nil {
 		return err
 	}
@@ -66,17 +59,21 @@ func (k keychainStore) Write(profile string, data []byte) error {
 }
 
 func (k keychainStore) Delete(profile string) error {
-	service, err := ServiceName(profile, defaultClaudePath())
+	service, err := ServiceName(profile, DefaultClaudeDir())
 	if err != nil {
 		return err
 	}
+	return k.deleteService(service)
+}
+
+func (k keychainStore) deleteService(service string) error {
 	cmd := exec.Command("/usr/bin/security", "delete-generic-password",
 		"-s", service, "-a", k.user)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		s := stderr.String()
-		if strings.Contains(s, "could not be found") || strings.Contains(s, "item could not be found") {
+		if strings.Contains(s, "could not be found") {
 			return nil
 		}
 		return fmt.Errorf("security delete: %w: %s", err, strings.TrimSpace(s))
@@ -93,4 +90,20 @@ func (k keychainStore) Exists(profile string) (bool, error) {
 		return false, nil
 	}
 	return false, err
+}
+
+// ListServices returns the service names of all generic-password items in the
+// user's default keychain.
+func ListServices() ([]string, error) {
+	out, err := exec.Command("/usr/bin/security", "dump-keychain").Output()
+	if err != nil {
+		return nil, err
+	}
+	var services []string
+	for l := range strings.SplitSeq(string(out), "\n") {
+		if svc, ok := strings.CutPrefix(strings.TrimSpace(l), `"svce"<blob>="`); ok {
+			services = append(services, strings.TrimSuffix(svc, `"`))
+		}
+	}
+	return services, nil
 }

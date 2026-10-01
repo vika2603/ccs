@@ -3,10 +3,18 @@ package creds
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"os"
 	"path/filepath"
 )
 
 const servicePrefix = "Claude Code-credentials"
+
+// DefaultClaudeDir is the config directory vanilla Claude Code uses when
+// CLAUDE_CONFIG_DIR is unset. Its keychain service name carries no hash suffix.
+func DefaultClaudeDir() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".claude")
+}
 
 func ServiceName(path, defaultPath string) (string, error) {
 	absPath, err := filepath.Abs(path)

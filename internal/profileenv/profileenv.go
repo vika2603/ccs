@@ -4,16 +4,17 @@
 package profileenv
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/vika2603/ccs/internal/fsutil"
 )
 
 type File struct {
@@ -61,30 +62,11 @@ func Save(path string, f File) error {
 			return err
 		}
 	}
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(f); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, ".env.*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return err
-	}
-	if err := toml.NewEncoder(tmp).Encode(f); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
-		return err
-	}
-	return os.Rename(tmpName, path)
+	return fsutil.WriteFileAtomic(path, buf.Bytes(), 0o600)
 }
 
 // Keys returns env var names in deterministic (sorted) order.
@@ -95,23 +77,6 @@ func (f File) Keys() []string {
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-// Signature returns a short identifier that changes when either the active
-// profile or its env file on disk changes. An empty profile yields a fixed
-// sentinel so the hook can detect "no active profile" -> "profile X" transitions.
-func Signature(profile, envFilePath string) string {
-	if profile == "" {
-		return "!none"
-	}
-	if envFilePath == "" {
-		return profile + ":0"
-	}
-	info, err := os.Stat(envFilePath)
-	if err != nil {
-		return profile + ":0"
-	}
-	return profile + ":" + strconv.FormatInt(info.ModTime().UnixNano(), 10)
 }
 
 // ParseAssignment splits a single "KEY=VALUE" argument. The VALUE part may

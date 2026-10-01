@@ -2,6 +2,7 @@ package creds
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 )
 
@@ -22,7 +23,7 @@ func (notFoundError) Error() string { return "credentials not found" }
 // Contract: write new first, verify new is readable and identical, then delete old.
 func Migrate(s Store, oldProfile, newProfile, defaultPath string) error {
 	data, err := s.Read(oldProfile)
-	if err == ErrNotFound {
+	if errors.Is(err, ErrNotFound) {
 		return nil
 	}
 	if err != nil {

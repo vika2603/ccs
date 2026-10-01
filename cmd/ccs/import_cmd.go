@@ -3,7 +3,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -11,10 +10,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/vika2603/ccs/internal/archive"
-	"github.com/vika2603/ccs/internal/creds"
+	"github.com/vika2603/ccs/internal/fsutil"
 	"github.com/vika2603/ccs/internal/layout"
-	"github.com/vika2603/ccs/internal/link"
-	"github.com/vika2603/ccs/internal/state"
 )
 
 var importPlatformOverride = runtime.GOOS
@@ -28,7 +25,9 @@ func newImportCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			src := args[0]
-			p, err := layout.FromEnv()
+			// Only paths and the credential store are needed; skipping
+			// config.toml keeps recovery possible when it is unreadable.
+			a, err := loadPaths()
 			if err != nil {
 				return err
 			}
@@ -48,12 +47,12 @@ func newImportCmd() *cobra.Command {
 			}
 			name := m.Profile
 			if asName != "" {
-				if err := state.ValidName(asName); err != nil {
-					return err
-				}
 				name = asName
 			}
-			dst := p.ProfilePath(name)
+			if err := layout.ValidName(name); err != nil {
+				return err
+			}
+			dst := a.ProfilePath(name)
 			if _, err := os.Stat(dst); err == nil {
 				if !force {
 					return fmt.Errorf("profile %q already exists (use --force)", name)
@@ -64,18 +63,20 @@ func newImportCmd() *cobra.Command {
 			} else if !errors.Is(err, os.ErrNotExist) {
 				return err
 			}
-			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			if err := os.MkdirAll(dst, 0o755); err != nil {
 				return err
 			}
-			if err := moveTree(filepath.Join(tmp, "profile"), dst); err != nil {
-				return err
+			if profileSrc := filepath.Join(tmp, "profile"); dirExists(profileSrc) {
+				if err := fsutil.CopyTree(profileSrc, dst); err != nil {
+					return err
+				}
 			}
 			sharedSrc := filepath.Join(tmp, "shared")
-			if _, err := os.Stat(sharedSrc); err == nil {
+			if dirExists(sharedSrc) {
 				entries, _ := os.ReadDir(sharedSrc)
 				for _, e := range entries {
-					target := p.SharedField(e.Name())
-					install, err := sharedSlotAvailable(target)
+					target := a.SharedField(e.Name())
+					install, err := fsutil.IsEmpty(target)
 					if err != nil {
 						return err
 					}
@@ -83,12 +84,14 @@ func newImportCmd() *cobra.Command {
 						if err := os.RemoveAll(target); err != nil {
 							return err
 						}
-						if err := moveTree(filepath.Join(sharedSrc, e.Name()), target); err != nil {
+						if err := fsutil.CopyTree(filepath.Join(sharedSrc, e.Name()), target); err != nil {
 							return err
 						}
+					} else {
+						fmt.Fprintf(cmd.ErrOrStderr(), "note: shared/%s already has content; kept it and linked the profile to it\n", e.Name())
 					}
 					inProfile := filepath.Join(dst, e.Name())
-					if err := link.ReplaceCopyWithSymlink(inProfile, target); err != nil {
+					if err := fsutil.ForceSymlink(target, inProfile); err != nil {
 						return err
 					}
 				}
@@ -107,7 +110,7 @@ func newImportCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				if err := creds.New().Write(dst, plain); err != nil {
+				if err := a.creds.Write(dst, plain); err != nil {
 					return err
 				}
 			}
@@ -120,45 +123,7 @@ func newImportCmd() *cobra.Command {
 	return cmd
 }
 
-func sharedSlotAvailable(target string) (bool, error) {
-	info, err := os.Lstat(target)
-	if errors.Is(err, os.ErrNotExist) {
-		return true, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	if !info.IsDir() {
-		return info.Size() == 0, nil
-	}
-	entries, err := os.ReadDir(target)
-	if err != nil {
-		return false, err
-	}
-	return len(entries) == 0, nil
-}
-
-func moveTree(src, dst string) error {
-	return filepath.Walk(src, func(p string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(src, p)
-		target := filepath.Join(dst, rel)
-		if info.IsDir() {
-			return os.MkdirAll(target, info.Mode())
-		}
-		in, err := os.Open(p)
-		if err != nil {
-			return err
-		}
-		defer in.Close()
-		out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
-		if err != nil {
-			return err
-		}
-		defer out.Close()
-		_, err = io.Copy(out, in)
-		return err
-	})
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
