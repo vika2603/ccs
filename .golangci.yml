@@ -1,0 +1,38 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - errorlint
+    - misspell
+    - nolintlint
+    - unconvert
+    - usestdlibvars
+  settings:
+    errcheck:
+      exclude-functions:
+        # Terminal output; a failed write to stdout/stderr has no recovery path.
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        # Best-effort cleanup of temporary paths and read-only handles. Write
+        # paths join their Close error into the returned error explicitly.
+        - os.RemoveAll
+        - (*os.File).Close
+        - (*os.Root).Close
+  exclusions:
+    rules:
+      # Test fixtures are built with unchecked os calls; a failed setup step
+      # surfaces as a failed assertion right after it.
+      - path: _test\.go
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/vika2603/ccs

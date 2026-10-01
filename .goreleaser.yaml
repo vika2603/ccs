@@ -1,7 +1,5 @@
+version: 2
 project_name: ccs
-before:
-  hooks:
-    - go mod tidy
 builds:
   - id: ccs
     main: ./cmd/ccs
@@ -17,7 +15,7 @@ builds:
     ldflags:
       - -s -w -X main.Version={{.Version}}
 archives:
-  - format: tar.gz
+  - formats: [tar.gz]
     name_template: "ccs_{{ .Os }}_{{ .Arch }}"
 checksum:
   name_template: "SHA256SUMS"
